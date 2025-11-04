@@ -1,0 +1,26 @@
+# Exemplo de arquivo de configuração
+# Copie este arquivo para 'config.local' e personalize
+
+# Nome da rede WiFi (SSID)
+WIFI_SSID="RaspberryPi-Hotspot"
+
+# Senha da rede WiFi (mínimo 8 caracteres)
+WIFI_PASSWORD="raspberry123"
+
+# Interface de rede WiFi
+INTERFACE="wlan0"
+
+# IP do Access Point
+IP_ADDRESS="192.168.4.1"
+
+# Range de IPs para DHCP
+DHCP_RANGE_START="192.168.4.2"
+DHCP_RANGE_END="192.168.4.20"
+
+# Canal WiFi (1-13)
+WIFI_CHANNEL="7"
+
+# Para usar estas configurações:
+# 1. Copie este arquivo: cp config.example config.local
+# 2. Edite o arquivo: nano config.local
+# 3. Execute: source config.local && sudo -E ./install.sh

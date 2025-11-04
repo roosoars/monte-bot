@@ -1,0 +1,15 @@
+# Arquivos de backup
+*.backup
+*.bak
+*~
+
+# Logs
+*.log
+
+# Arquivos de configuração local
+config.local
+
+# Arquivos temporários
+*.tmp
+.DS_Store
+Thumbs.db
