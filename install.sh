@@ -52,6 +52,7 @@ systemctl stop nginx || true
 
 # Configurar IP estático para wlan0
 echo -e "${GREEN}[4/7] Configurando interface de rede...${NC}"
+mkdir -p /etc/network/interfaces.d
 cat > /etc/network/interfaces.d/wlan0 << EOF
 # Interface WiFi configurada como Access Point
 auto wlan0
