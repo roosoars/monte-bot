@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Configuration values; adjust if you need a different SSID, passphrase, or IP range.
+# Configuration values; adjust iyou need a different SSID, passphrase, or IP range.
 HOTSPOT_SSID="MonteHotspot"
 HOTSPOT_PASSWORD="Rod2804@"
 HOTSPOT_CHANNEL="6"
