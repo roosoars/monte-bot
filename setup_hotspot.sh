@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Configuration values; adjust if you need a different SSID, passphrase, or IP range.
 HOTSPOT_SSID="MonteHotspot"
-HOTSPOT_PASSWORD="MonteHotspot123"
+HOTSPOT_PASSWORD="Rod2804@"
 HOTSPOT_CHANNEL="6"
 HOTSPOT_COUNTRY="BR"
 HOTSPOT_IP="192.168.50.1"
@@ -48,9 +48,10 @@ disable_wpa_supplicant() {
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends hostapd dnsmasq lighttpd rfkill
+  apt-get install -y --no-install-recommends hostapd dnsmasq nginx rfkill
   systemctl stop hostapd || true
   systemctl stop dnsmasq || true
+  systemctl stop nginx || true
 }
 
 configure_dhcpcd() {
@@ -114,7 +115,7 @@ EOF
   sed -i 's|^#*\s*DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
 }
 
-configure_lighttpd() {
+configure_nginx() {
   local doc_root="/var/www/html"
   mkdir -p "${doc_root}"
   cat <<'EOF' >"${doc_root}/index.html"
@@ -135,7 +136,8 @@ configure_lighttpd() {
 EOF
   chown -R www-data:www-data "${doc_root}"
   chmod -R 755 "${doc_root}"
-  systemctl enable --now lighttpd
+  systemctl enable nginx
+  systemctl restart nginx
 }
 
 restore_services() {
@@ -156,7 +158,7 @@ main() {
   configure_sysctl
   configure_dnsmasq
   configure_hostapd
-  configure_lighttpd
+  configure_nginx
   restore_services
   echo "[INFO] Hotspot setup complete. Reboot to ensure all settings persist." >&2
 }
