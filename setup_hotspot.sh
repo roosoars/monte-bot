@@ -34,11 +34,18 @@ check_operating_system() {
   fi
 }
 
-mask_rfkill() {
+disable_rfkill_stack() {
+  systemctl stop rfkill.service rfkill-block@${WLAN_IFACE}.service >/dev/null 2>&1 || true
+  systemctl stop rfkill-block@.service systemd-rfkill.service systemd-rfkill.socket >/dev/null 2>&1 || true
+  systemctl disable rfkill.service rfkill-block@${WLAN_IFACE}.service >/dev/null 2>&1 || true
+  systemctl disable rfkill-block@.service systemd-rfkill.service systemd-rfkill.socket >/dev/null 2>&1 || true
   systemctl mask rfkill.service rfkill-block@${WLAN_IFACE}.service >/dev/null 2>&1 || true
-  systemctl mask rfkill-block@.service >/dev/null 2>&1 || true
-  systemctl mask systemd-rfkill.service systemd-rfkill.socket >/dev/null 2>&1 || true
-  rfkill unblock all || true
+  systemctl mask rfkill-block@.service systemd-rfkill.service systemd-rfkill.socket >/dev/null 2>&1 || true
+  ln -sf /dev/null /etc/systemd/system/systemd-rfkill.service
+  ln -sf /dev/null /etc/systemd/system/systemd-rfkill.socket
+  ln -sf /dev/null /etc/systemd/system/rfkill.service
+  ln -sf /dev/null /etc/systemd/system/rfkill-block@.service
+  rm -rf /var/lib/systemd/rfkill
 }
 
 disable_wpa_supplicant() {
@@ -49,10 +56,12 @@ disable_wpa_supplicant() {
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends hostapd dnsmasq nginx rfkill dhcpcd5
+  apt-get install -y --no-install-recommends hostapd dnsmasq nginx dhcpcd5
   systemctl stop hostapd || true
   systemctl stop dnsmasq || true
   systemctl stop nginx || true
+  apt-get purge -y rfkill >/dev/null 2>&1 || true
+  apt-get autoremove -y >/dev/null 2>&1 || true
 }
 
 ensure_dhcpcd() {
@@ -90,7 +99,11 @@ else
   mkdir -p /var/lib/systemd/rfkill
 fi
 
-/usr/sbin/rfkill unblock all || true
+for rf_path in /sys/class/rfkill/rfkill*; do
+  [[ -d ${rf_path} ]] || continue
+  echo 0 >"${rf_path}/soft" 2>/dev/null || true
+  echo 0 >"${rf_path}/hard" 2>/dev/null || true
+done
 exit 0
 EOF
   chmod 755 "${script_path}"
@@ -213,7 +226,7 @@ restore_services() {
 main() {
   require_root
   check_operating_system
-  mask_rfkill
+  disable_rfkill_stack
   disable_wpa_supplicant
   install_packages
   ensure_dhcpcd
