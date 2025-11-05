@@ -37,6 +37,7 @@ check_operating_system() {
 mask_rfkill() {
   systemctl mask rfkill.service rfkill-block@${WLAN_IFACE}.service >/dev/null 2>&1 || true
   systemctl mask rfkill-block@.service >/dev/null 2>&1 || true
+  systemctl mask systemd-rfkill.service systemd-rfkill.socket >/dev/null 2>&1 || true
   rfkill unblock all || true
 }
 
@@ -72,6 +73,27 @@ EOF
   fi
   systemctl enable dhcpcd >/dev/null 2>&1 || true
   systemctl start dhcpcd || true
+}
+
+configure_rfkill_unit() {
+  local unit_path="/etc/systemd/system/hotspot-rfkill-unblock.service"
+  cat <<'EOF' >"${unit_path}"
+[Unit]
+Description=Ensure wlan rfkill stays unblocked
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rfkill unblock all
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable hotspot-rfkill-unblock.service
+  systemctl start hotspot-rfkill-unblock.service
 }
 
 configure_dhcpcd() {
@@ -175,6 +197,7 @@ main() {
   disable_wpa_supplicant
   install_packages
   ensure_dhcpcd
+  configure_rfkill_unit
   configure_dhcpcd
   configure_sysctl
   configure_dnsmasq
