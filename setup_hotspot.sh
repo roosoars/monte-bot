@@ -76,17 +76,37 @@ EOF
 }
 
 configure_rfkill_unit() {
+  local script_path="/usr/local/sbin/hotspot-unblock-rfkill.sh"
   local unit_path="/etc/systemd/system/hotspot-rfkill-unblock.service"
+
+  cat <<'EOF' >"${script_path}"
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Remove any persisted rfkill blocks so Wi-Fi starts unblocked.
+if [[ -d /var/lib/systemd/rfkill ]]; then
+  find /var/lib/systemd/rfkill -type f -delete || true
+else
+  mkdir -p /var/lib/systemd/rfkill
+fi
+
+/usr/sbin/rfkill unblock all || true
+exit 0
+EOF
+  chmod 755 "${script_path}"
+
   cat <<'EOF' >"${unit_path}"
 [Unit]
 Description=Ensure wlan rfkill stays unblocked
 DefaultDependencies=no
 After=local-fs.target
-Before=network-pre.target
+Before=network-pre.target hostapd.service
+Wants=network-pre.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/sbin/rfkill unblock all
+ExecStart=/usr/local/sbin/hotspot-unblock-rfkill.sh
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
