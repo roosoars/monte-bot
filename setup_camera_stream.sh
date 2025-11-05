@@ -6,6 +6,41 @@ STATIC_DIR="/var/www/html/static"
 HLS_JS_PATH="${STATIC_DIR}/hls.min.js"
 CAMERA_RUNNER="/usr/local/sbin/rpicam-hls.sh"
 SERVICE_FILE="/etc/systemd/system/rpicam-hls.service"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ASSET_ROOT="${SCRIPT_DIR}/assets"
+
+deploy_file() {
+  local source_file=$1
+  local destination=$2
+  local permissions=${3:-644}
+  install -D -o www-data -g www-data -m "${permissions}" "${source_file}" "${destination}"
+}
+
+ensure_asset() {
+  local packaged=$1
+  local remote_url=$2
+  local destination=$3
+  local permissions=${4:-644}
+
+  if [[ -f ${packaged} ]]; then
+    deploy_file "${packaged}" "${destination}" "${permissions}"
+  else
+    echo "[ERRO] Arquivo empacotado ausente: ${packaged}" >&2
+    exit 1
+  fi
+
+  if [[ -n ${remote_url} ]]; then
+    local tmp
+    tmp=$(mktemp)
+    if curl -fL --connect-timeout 10 --max-time 120 -o "${tmp}" "${remote_url}"; then
+      deploy_file "${tmp}" "${destination}" "${permissions}"
+      echo "[INFO] Atualizado ${destination} a partir de ${remote_url}." >&2
+    else
+      echo "[AVISO] Não foi possível atualizar ${destination} de ${remote_url}. Mantendo versão empacotada." >&2
+    fi
+    rm -f "${tmp}"
+  fi
+}
 
 require_root() {
   if [[ $(id -u) -ne 0 ]]; then
@@ -65,48 +100,38 @@ prepare_filesystem() {
 
 download_hls_library() {
   local url="https://cdn.jsdelivr.net/npm/hls.js@1.5.4/dist/hls.min.js"
-  if curl -fL --connect-timeout 10 --max-time 30 -o "${HLS_JS_PATH}" "${url}"; then
-    chown www-data:www-data "${HLS_JS_PATH}"
-    chmod 644 "${HLS_JS_PATH}"
-    echo "[INFO] hls.js baixado para ${HLS_JS_PATH}." >&2
-  else
-    echo "[AVISO] Não foi possível baixar hls.js. Navegadores sem suporte nativo a HLS precisarão de conexão externa." >&2
-    rm -f "${HLS_JS_PATH}" >/dev/null 2>&1 || true
-  fi
+  local packaged="${ASSET_ROOT}/static/hls.min.js"
+  ensure_asset "${packaged}" "${url}" "${HLS_JS_PATH}"
 }
 
 download_mediapipe_assets() {
   local base_url="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0"
   local base_dir="${STATIC_DIR}/mediapipe"
   local wasm_dir="${base_dir}/wasm"
-  local -A files=(
-    ["${base_dir}/vision_bundle.js"]="${base_url}/vision_bundle.js"
-    ["${wasm_dir}/vision_wasm_internal.js"]="${base_url}/wasm/vision_wasm_internal.js"
-    ["${wasm_dir}/vision_wasm_internal.wasm"]="${base_url}/wasm/vision_wasm_internal.wasm"
-    ["${wasm_dir}/vision_wasm_nosimd_internal.js"]="${base_url}/wasm/vision_wasm_nosimd_internal.js"
-    ["${wasm_dir}/vision_wasm_nosimd_internal.wasm"]="${base_url}/wasm/vision_wasm_nosimd_internal.wasm"
-  )
 
-  for target in "${!files[@]}"; do
-    if curl -fL --connect-timeout 10 --max-time 120 -o "${target}" "${files[${target}]}"; then
-      chown www-data:www-data "${target}"
-      chmod 644 "${target}"
-    else
-      echo "[AVISO] Falha ao baixar ${files[${target}]}. Modo offline do MediaPipe pode não funcionar." >&2
-      rm -f "${target}" >/dev/null 2>&1 || true
-    fi
-  done
+  ensure_asset "${ASSET_ROOT}/static/mediapipe/vision_bundle.js" \
+    "${base_url}/vision_bundle.js" \
+    "${base_dir}/vision_bundle.js"
 
-  local model_url="https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite"
-  local model_path="${STATIC_DIR}/models/efficientdet_lite0.tflite"
-  if curl -fL --connect-timeout 10 --max-time 120 -o "${model_path}" "${model_url}"; then
-    chown www-data:www-data "${model_path}"
-    chmod 644 "${model_path}"
-    echo "[INFO] Modelo MediaPipe salvo em ${model_path}." >&2
-  else
-    echo "[AVISO] Não foi possível baixar o modelo efficientdet_lite0. Rastreamento exigirá acesso à internet." >&2
-    rm -f "${model_path}" >/dev/null 2>&1 || true
-  fi
+  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_internal.js" \
+    "${base_url}/wasm/vision_wasm_internal.js" \
+    "${wasm_dir}/vision_wasm_internal.js"
+
+  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_internal.wasm" \
+    "${base_url}/wasm/vision_wasm_internal.wasm" \
+    "${wasm_dir}/vision_wasm_internal.wasm"
+
+  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_nosimd_internal.js" \
+    "${base_url}/wasm/vision_wasm_nosimd_internal.js" \
+    "${wasm_dir}/vision_wasm_nosimd_internal.js"
+
+  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_nosimd_internal.wasm" \
+    "${base_url}/wasm/vision_wasm_nosimd_internal.wasm" \
+    "${wasm_dir}/vision_wasm_nosimd_internal.wasm"
+
+  ensure_asset "${ASSET_ROOT}/static/models/efficientdet_lite0.tflite" \
+    "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite" \
+    "${STATIC_DIR}/models/efficientdet_lite0.tflite"
 }
 
 write_camera_runner() {
@@ -124,10 +149,12 @@ cleanup() {
 trap cleanup EXIT
 
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
-STREAM_WIDTH="${STREAM_WIDTH:-1280}"
-STREAM_HEIGHT="${STREAM_HEIGHT:-720}"
-STREAM_BITRATE="${STREAM_BITRATE:-5000000}"
+STREAM_WIDTH="${STREAM_WIDTH:-1920}"
+STREAM_HEIGHT="${STREAM_HEIGHT:-1080}"
+STREAM_BITRATE="${STREAM_BITRATE:-10000000}"
 STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-${STREAM_FRAMERATE}}"
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.4}"
+HLS_LIST_SIZE="${HLS_LIST_SIZE:-4}"
 
 rpicam-vid \
   --timeout 0 \
@@ -139,18 +166,21 @@ rpicam-vid \
   --intra "${STREAM_KEYFRAME_INTERVAL}" \
   --codec h264 \
   --profile high \
+  --level 4.2 \
   --inline \
   -o - \
   | ffmpeg \
       -loglevel warning \
+      -fflags nobuffer \
+      -flags low_delay \
       -f h264 \
       -i - \
       -an \
       -c:v copy \
       -f hls \
-      -hls_time 1 \
-      -hls_list_size 6 \
-      -hls_flags delete_segments+append_list+omit_endlist \
+      -hls_time "${HLS_SEGMENT_SECONDS}" \
+      -hls_list_size "${HLS_LIST_SIZE}" \
+      -hls_flags delete_segments+append_list+omit_endlist+independent_segments \
       -hls_segment_type mpegts \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
       "${STREAM_DIR}/index.m3u8"
@@ -185,6 +215,7 @@ update_web_page() {
   <meta charset="UTF-8" />
   <title>Monte Bot - Rastreamento ao Vivo</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' ry='12' fill='%23002233'/%3E%3Cpath d='M16 42l8-20h4l8 20h-4l-1.8-5.2h-9.2L20 42zm7.4-8.4h6.4L27 24.4zM40 22h4v20h-4z' fill='%2300c6ff'/%3E%3C/svg%3E" />
   <style>
     :root {
       color-scheme: dark;
@@ -198,15 +229,15 @@ update_web_page() {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: radial-gradient(circle at top, #102a44, #050609 72%);
+      background: radial-gradient(circle at top, #0f2c48, #03070d 75%);
       font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: #e2f3ff;
-      padding: 32px 18px;
+      padding: 34px 18px;
     }
     main {
       width: min(1080px, 100%);
       display: grid;
-      gap: 28px;
+      gap: 30px;
     }
     header {
       text-align: center;
@@ -224,13 +255,18 @@ update_web_page() {
       color: rgba(226, 243, 255, 0.75);
       font-size: 1rem;
     }
+    #help-text {
+      margin: 0;
+      color: rgba(226, 243, 255, 0.6);
+      font-size: 0.9rem;
+    }
     #video-wrapper {
       position: relative;
       background: rgba(0, 0, 0, 0.7);
-      border: 1px solid rgba(0, 140, 255, 0.35);
+      border: 1px solid rgba(0, 140, 255, 0.38);
       border-radius: 18px;
       overflow: hidden;
-      box-shadow: 0 22px 38px rgba(0, 0, 0, 0.45);
+      box-shadow: 0 24px 42px rgba(0, 0, 0, 0.5);
     }
     #video-wrapper video,
     #video-wrapper canvas {
@@ -280,17 +316,20 @@ update_web_page() {
       font-size: 1rem;
       color: rgba(226, 243, 255, 0.78);
     }
+    #status strong {
+      color: #7fe1ff;
+    }
     #status.error {
       color: #ff867c;
     }
     #tracking-info {
       display: grid;
-      gap: 12px;
       background: rgba(0, 14, 30, 0.45);
       border: 1px solid rgba(0, 140, 255, 0.25);
       border-radius: 14px;
       padding: 18px 22px;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      gap: 16px;
     }
     #tracking-info p {
       margin: 0;
@@ -312,9 +351,38 @@ update_web_page() {
       letter-spacing: 0.05rem;
       text-transform: uppercase;
     }
+    #targetSnapshotWrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      flex-wrap: wrap;
+      padding-top: 4px;
+    }
+    #targetSnapshot {
+      width: 180px;
+      height: auto;
+      max-width: 100%;
+      object-fit: cover;
+      border-radius: 12px;
+      border: 1px solid rgba(0, 153, 255, 0.4);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+      background: rgba(0, 0, 0, 0.7);
+      aspect-ratio: 3 / 4;
+    }
+    #snapshotStatus {
+      max-width: 320px;
+      color: rgba(226, 243, 255, 0.75);
+      font-size: 0.9rem;
+      line-height: 1.5;
+      text-align: left;
+    }
     @media (max-width: 720px) {
       #startTracking {
         width: 100%;
+      }
+      #targetSnapshotWrapper {
+        justify-content: center;
       }
     }
   </style>
@@ -325,6 +393,7 @@ update_web_page() {
       <span class="badge">Monte Bot</span>
       <h1>Rastreamento ao Vivo</h1>
       <p id="subtitle">Conecte-se ao hotspot, assista ao stream e acione o modo perseguição da pessoa à frente.</p>
+      <p id="help-text">Posicione a pessoa centralizada. Após a contagem, uma imagem de referência será capturada para manter o rastreamento.</p>
     </header>
 
     <section id="video-wrapper">
@@ -342,341 +411,538 @@ update_web_page() {
     <section id="tracking-info">
       <p id="movementOutput"><strong>Movimento previsto:</strong> aguardando ativação.</p>
       <p id="clothingOutput"><strong>Traje dominante:</strong> indefinido.</p>
+      <div id="targetSnapshotWrapper">
+        <img id="targetSnapshot" alt="Referência do alvo" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" />
+        <p id="snapshotStatus">Nenhuma referência capturada ainda. Fique de frente para a câmera durante a contagem regressiva.</p>
+      </div>
     </section>
   </main>
 
-  <script src="static/mediapipe/vision_bundle.js"></script>
-  <script>
-    (function () {
-      const video = document.getElementById('cameraStream');
-      const overlay = document.getElementById('overlay');
-      const overlayCtx = overlay.getContext('2d');
-      const analysisCanvas = document.createElement('canvas');
-      const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
-      const statusEl = document.getElementById('status');
-      const startBtn = document.getElementById('startTracking');
-      const movementEl = document.getElementById('movementOutput');
-      const clothingEl = document.getElementById('clothingOutput');
-      const source = 'stream/index.m3u8';
-      const wasmBases = ['static/mediapipe/wasm', 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'];
-      const modelUris = [
-        'static/models/efficientdet_lite0.tflite',
-        'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite'
-      ];
+  <script type="module">
+    const video = document.getElementById('cameraStream');
+    const overlay = document.getElementById('overlay');
+    const overlayCtx = overlay.getContext('2d');
+    const analysisCanvas = document.createElement('canvas');
+    const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true }) || analysisCanvas.getContext('2d');
+    const snapshotCanvas = document.createElement('canvas');
+    const snapshotCtx = snapshotCanvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('startTracking');
+    const movementEl = document.getElementById('movementOutput');
+    const clothingEl = document.getElementById('clothingOutput');
+    const snapshotImg = document.getElementById('targetSnapshot');
+    const snapshotStatus = document.getElementById('snapshotStatus');
+    const source = 'stream/index.m3u8';
+    const PLACEHOLDER_SNAPSHOT = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+    const visionSources = [
+      './static/mediapipe/vision_bundle.js',
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js'
+    ];
+    const wasmBases = ['static/mediapipe/wasm', 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'];
+    const modelUris = [
+      'static/models/efficientdet_lite0.tflite',
+      'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite'
+    ];
 
-      let detector = null;
-      let trackingActive = false;
-      let lastVideoTime = -1;
-      let animationFrameId = 0;
+    let visionModule = null;
+    let detector = null;
+    let trackingActive = false;
+    let lastVideoTime = -1;
+    let animationFrameId = 0;
+    let frameWidth = 1280;
+    let frameHeight = 720;
+    let targetProfile = null;
+    let bestAreaRatio = 0;
+    let previousCenter = null;
+    let lostFrames = 0;
 
-      function updateStatus(message, isError) {
-        statusEl.textContent = message;
-        statusEl.classList.toggle('error', Boolean(isError));
+    function updateStatus(message, isError) {
+      statusEl.innerHTML = message;
+      statusEl.classList.toggle('error', Boolean(isError));
+    }
+
+    function ensureVideoSizing() {
+      const width = video.videoWidth || 1920;
+      const height = video.videoHeight || 1080;
+      frameWidth = width;
+      frameHeight = height;
+      if (overlay.width !== width || overlay.height !== height) {
+        overlay.width = width;
+        overlay.height = height;
+      }
+      analysisCanvas.width = width;
+      analysisCanvas.height = height;
+    }
+
+    function updateAnalysisFrame() {
+      if (!analysisCtx || analysisCanvas.width === 0 || analysisCanvas.height === 0) {
+        return false;
+      }
+      analysisCtx.drawImage(video, 0, 0, analysisCanvas.width, analysisCanvas.height);
+      return true;
+    }
+
+    function loadStream() {
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = source;
+        video.addEventListener('loadeddata', () => {
+          updateStatus('Transmissão ao vivo ativa.', false);
+          ensureVideoSizing();
+        });
+        video.addEventListener('error', () => {
+          updateStatus('Não foi possível iniciar o stream. Verifique o serviço rpicam-hls.', true);
+        });
+        return;
       }
 
-      function ensureVideoSizing() {
-        const width = video.videoWidth || 1280;
-        const height = video.videoHeight || 720;
-        if (overlay.width !== width || overlay.height !== height) {
-          overlay.width = width;
-          overlay.height = height;
+      const script = document.createElement('script');
+      script.onload = () => {
+        if (typeof Hls === 'undefined') {
+          updateStatus('Falha ao carregar hls.js. Tente acessar via Safari/iOS ou conecte-se à internet.', true);
+          return;
         }
-        analysisCanvas.width = width;
-        analysisCanvas.height = height;
-      }
-
-      function loadStream() {
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = source;
-          video.addEventListener('loadeddata', () => {
-            updateStatus('Transmissão ao vivo ativa.', false);
-            ensureVideoSizing();
-          });
-          video.addEventListener('error', () => {
-            updateStatus('Não foi possível iniciar o stream. Verifique o serviço rpicam-hls.', true);
-          });
+        if (!Hls.isSupported()) {
+          updateStatus('Seu navegador não oferece suporte a HLS.', true);
           return;
         }
 
-        const script = document.createElement('script');
-        script.onload = () => {
-          if (typeof Hls === 'undefined') {
-            updateStatus('Falha ao carregar hls.js. Tente acessar via Safari/iOS ou conecte-se à internet.', true);
-            return;
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 10,
+          maxBufferLength: 5
+        });
+        hls.loadSource(source);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, function () {
+          updateStatus('Transmissão ao vivo ativa.', false);
+          video.play().catch(() => {});
+          ensureVideoSizing();
+        });
+        hls.on(Hls.Events.ERROR, function (event, data) {
+          if (data.fatal) {
+            updateStatus('Erro fatal no stream: ' + data.type + ' - ' + data.details, true);
+            hls.destroy();
           }
-          if (!Hls.isSupported()) {
-            updateStatus('Seu navegador não oferece suporte a HLS.', true);
-            return;
-          }
+        });
+      };
+      script.onerror = function () {
+        updateStatus('Não foi possível carregar hls.js. Conecte-se à internet ou utilize Safari.', true);
+      };
+      script.src = 'static/hls.min.js';
+      document.body.appendChild(script);
+    }
 
-          const hls = new Hls({
-            enableWorker: true,
-            lowLatencyMode: true,
-            backBufferLength: 30
-          });
-          hls.loadSource(source);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, function () {
-            updateStatus('Transmissão ao vivo ativa.', false);
-            video.play().catch(() => {});
-            ensureVideoSizing();
-          });
-          hls.on(Hls.Events.ERROR, function (event, data) {
-            if (data.fatal) {
-              updateStatus('Erro fatal no stream: ' + data.type + ' - ' + data.details, true);
-              hls.destroy();
-            }
-          });
-        };
-        script.onerror = function () {
-          updateStatus('Não foi possível carregar hls.js. Conecte-se à internet ou utilize Safari.', true);
-        };
-        script.src = 'static/hls.min.js';
-        document.body.appendChild(script);
+    async function loadVisionModule() {
+      if (visionModule) {
+        return visionModule;
+      }
+      for (const src of visionSources) {
+        try {
+          const mod = await import(src);
+          if (mod && mod.FilesetResolver && mod.ObjectDetector) {
+            visionModule = mod;
+            console.log('[MediaPipe] vision_bundle carregado de', src);
+            return visionModule;
+          }
+        } catch (err) {
+          console.warn('[MediaPipe] Falha ao importar', src, err);
+        }
+      }
+      throw new Error('Nenhum vision_bundle disponível.');
+    }
+
+    async function ensureDetector() {
+      if (detector) {
+        return detector;
+      }
+      let visionApi;
+      try {
+        visionApi = await loadVisionModule();
+      } catch (err) {
+        updateStatus('Biblioteca MediaPipe indisponível. Verifique o console.', true);
+        throw err;
+      }
+      updateStatus('Carregando MediaPipe para rastreamento...', false);
+      for (const base of wasmBases) {
+        for (const model of modelUris) {
+          try {
+            const fileset = await visionApi.FilesetResolver.forVisionTasks(base);
+            const created = await visionApi.ObjectDetector.createFromOptions(fileset, {
+              baseOptions: { modelAssetPath: model },
+              runningMode: 'VIDEO',
+              scoreThreshold: 0.4,
+              categoryAllowlist: ['person']
+            });
+            detector = created;
+            updateStatus('MediaPipe pronto. Pessoa será detectada após a contagem regressiva.', false);
+            return detector;
+          } catch (err) {
+            console.warn('[MediaPipe] Falha ao abrir modelo', model, 'via', base, err);
+          }
+        }
+      }
+      updateStatus('Não foi possível inicializar o detector. Verifique a conexão e tente novamente.', true);
+      throw new Error('Falha ao criar detector MediaPipe');
+    }
+
+    function describeColor(r, g, b) {
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const luminance = (max + min) / 2;
+      const delta = max - min;
+      let hue = 0;
+      let saturation = 0;
+      if (delta !== 0) {
+        saturation = luminance > 127 ? delta / (510 - max - min) : delta / (max + min);
+        switch (max) {
+          case r:
+            hue = ((g - b) / delta) % 6;
+            break;
+          case g:
+            hue = (b - r) / delta + 2;
+            break;
+          default:
+            hue = (r - g) / delta + 4;
+        }
+        hue *= 60;
+        if (hue < 0) hue += 360;
+      }
+      if (luminance < 40) return 'preto';
+      if (luminance > 210 && saturation < 0.2) return 'branco';
+      if (saturation < 0.18) return 'cinza';
+      if (hue < 20 || hue >= 345) return 'vermelho';
+      if (hue < 50) return 'laranja';
+      if (hue < 70) return 'amarelo';
+      if (hue < 160) return 'verde';
+      if (hue < 210) return 'ciano';
+      if (hue < 255) return 'azul';
+      if (hue < 290) return 'anil';
+      if (hue < 345) return 'roxo';
+      return 'desconhecido';
+    }
+
+    function analyzeClothing(bbox) {
+      if (!analysisCtx || !bbox) {
+        return { label: 'indisponível', r: 0, g: 0, b: 0 };
+      }
+      const width = Math.max(1, Math.floor(bbox.width));
+      const height = Math.max(1, Math.floor(bbox.height));
+      const x = Math.max(0, Math.floor(bbox.originX));
+      const y = Math.max(0, Math.floor(bbox.originY));
+      if (width <= 0 || height <= 0 || x >= analysisCanvas.width || y >= analysisCanvas.height) {
+        return { label: 'indefinido', r: 0, g: 0, b: 0 };
+      }
+      const sampleWidth = Math.min(width, Math.max(1, analysisCanvas.width - x));
+      const sampleHeight = Math.min(height, Math.max(1, analysisCanvas.height - y));
+      if (sampleWidth <= 0 || sampleHeight <= 0) {
+        return { label: 'indefinido', r: 0, g: 0, b: 0 };
+      }
+      let imageData;
+      try {
+        imageData = analysisCtx.getImageData(x, y, sampleWidth, sampleHeight);
+      } catch (err) {
+        console.warn('[MediaPipe] Não foi possível ler pixels para análise', err);
+        return { label: 'indisponível', r: 0, g: 0, b: 0 };
+      }
+      const data = imageData.data;
+      if (!data || !data.length) {
+        return { label: 'indefinido', r: 0, g: 0, b: 0 };
+      }
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let count = 0;
+      const step = Math.max(1, Math.floor(data.length / (4 * 6000)));
+      for (let i = 0; i < data.length; i += 4 * step) {
+        r += data[i];
+        g += data[i + 1];
+        b += data[i + 2];
+        count++;
+      }
+      if (count === 0) {
+        return { label: 'indefinido', r: 0, g: 0, b: 0 };
+      }
+      r = Math.round(r / count);
+      g = Math.round(g / count);
+      b = Math.round(b / count);
+      return { label: describeColor(r, g, b), r, g, b };
+    }
+
+    function drawOverlay(bbox) {
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+      if (!bbox) {
+        return;
+      }
+      overlayCtx.strokeStyle = 'rgba(0, 214, 255, 0.85)';
+      overlayCtx.lineWidth = 4;
+      overlayCtx.setLineDash([12, 8]);
+      overlayCtx.strokeRect(bbox.originX, bbox.originY, bbox.width, bbox.height);
+      overlayCtx.setLineDash([]);
+      const centerX = bbox.originX + bbox.width / 2;
+      const centerY = bbox.originY + bbox.height / 2;
+      overlayCtx.fillStyle = 'rgba(0, 214, 255, 0.85)';
+      overlayCtx.beginPath();
+      overlayCtx.arc(centerX, centerY, 6, 0, Math.PI * 2);
+      overlayCtx.fill();
+    }
+
+    function computeMovement(bbox) {
+      if (!bbox) {
+        return 'aguardar.';
+      }
+      const frameArea = Math.max(1, frameWidth * frameHeight);
+      const centerX = bbox.originX + bbox.width / 2;
+      const areaRatio = (bbox.width * bbox.height) / frameArea;
+      const offset = centerX / frameWidth - 0.5;
+      const commands = [];
+
+      if (areaRatio < 0.06) {
+        commands.push('andar para frente (alvo distante)');
+      } else if (areaRatio > 0.25) {
+        commands.push('reduzir velocidade (alvo muito próximo)');
+      } else {
+        commands.push('manter distância');
       }
 
-      async function ensureDetector() {
-        if (detector) {
-          return detector;
-        }
-        if (typeof vision === 'undefined' || !vision.FilesetResolver || !vision.ObjectDetector) {
-          updateStatus('Biblioteca MediaPipe indisponível.', true);
-          throw new Error('MediaPipe ausente');
-        }
-        updateStatus('Carregando MediaPipe para rastreamento...', false);
-        for (const base of wasmBases) {
-          for (const model of modelUris) {
-            try {
-              const fileset = await vision.FilesetResolver.forVisionTasks(base);
-              const created = await vision.ObjectDetector.createFromOptions(fileset, {
-                baseOptions: {
-                  modelAssetPath: model
-                },
-                runningMode: 'VIDEO',
-                scoreThreshold: 0.4,
-                categoryAllowlist: ['person']
-              });
-              detector = created;
-              updateStatus('MediaPipe pronto. Pessoa será detectada após a contagem regressiva.', false);
-              return detector;
-            } catch (err) {
-              console.warn('[MediaPipe] Falha ao carregar com base', base, 'e modelo', model, err);
-            }
-          }
-        }
-        updateStatus('Não foi possível inicializar o MediaPipe. Verifique a conexão e tente novamente.', true);
-        throw new Error('Falha ao criar detector');
+      if (offset > 0.12) {
+        commands.push(areaRatio < 0.22 ? 'virar para a direita e avançar' : 'virar para a direita');
+      } else if (offset < -0.12) {
+        commands.push(areaRatio < 0.22 ? 'virar para a esquerda e avançar' : 'virar para a esquerda');
+      } else {
+        commands.push('seguir em linha reta');
       }
 
-      function describeColor(r, g, b) {
-        const max = Math.max(r, g, b);
-        const min = Math.min(r, g, b);
-        const luminance = (max + min) / 2;
-        const delta = max - min;
-        let hue = 0;
-        let saturation = 0;
-        if (delta !== 0) {
-          saturation = luminance > 127 ? delta / (510 - max - min) : delta / (max + min);
-          switch (max) {
-            case r:
-              hue = ((g - b) / delta) % 6;
-              break;
-            case g:
-              hue = (b - r) / delta + 2;
-              break;
-            default:
-              hue = (r - g) / delta + 4;
-          }
-          hue *= 60;
-          if (hue < 0) hue += 360;
-        }
-        if (luminance < 40) return 'preto';
-        if (luminance > 210 && saturation < 0.2) return 'branco';
-        if (saturation < 0.18) return 'cinza';
-        if (hue < 20 || hue >= 345) return 'vermelho';
-        if (hue < 50) return 'laranja';
-        if (hue < 70) return 'amarelo';
-        if (hue < 160) return 'verde';
-        if (hue < 210) return 'ciano';
-        if (hue < 255) return 'azul';
-        if (hue < 290) return 'anil';
-        if (hue < 345) return 'roxo';
-        return 'desconhecido';
-      }
+      return commands.join(' + ');
+    }
 
-      function analyzeClothing(bbox) {
-        if (!analysisCtx) {
-          return { label: 'indisponível', r: 0, g: 0, b: 0 };
-        }
-        const width = Math.max(1, Math.floor(bbox.width));
-        const height = Math.max(1, Math.floor(bbox.height));
-        const x = Math.max(0, Math.floor(bbox.originX));
-        const y = Math.max(0, Math.floor(bbox.originY));
-        if (width <= 0 || height <= 0) {
-          return { label: 'indefinido', r: 0, g: 0, b: 0 };
-        }
-        analysisCtx.drawImage(video, 0, 0, analysisCanvas.width, analysisCanvas.height);
-        const sampleWidth = Math.min(width, Math.max(1, analysisCanvas.width - x));
-        const sampleHeight = Math.min(height, Math.max(1, analysisCanvas.height - y));
-        if (sampleWidth <= 0 || sampleHeight <= 0) {
-          return { label: 'indefinido', r: 0, g: 0, b: 0 };
-        }
-        const imageData = analysisCtx.getImageData(x, y, sampleWidth, sampleHeight);
-        const data = imageData.data;
-        if (!data.length) {
-          return { label: 'indefinido', r: 0, g: 0, b: 0 };
-        }
-        let r = 0;
-        let g = 0;
-        let b = 0;
-        let count = 0;
-        const step = Math.max(1, Math.floor(data.length / (4 * 5000)));
-        for (let i = 0; i < data.length; i += 4 * step) {
-          r += data[i];
-          g += data[i + 1];
-          b += data[i + 2];
-          count++;
-        }
-        if (count === 0) {
-          return { label: 'indefinido', r: 0, g: 0, b: 0 };
-        }
-        r = Math.round(r / count);
-        g = Math.round(g / count);
-        b = Math.round(b / count);
-        return { label: describeColor(r, g, b), r, g, b };
+    function colorDistance(a, b) {
+      if (!a || !b) {
+        return Number.POSITIVE_INFINITY;
       }
+      const dr = a.r - b.r;
+      const dg = a.g - b.g;
+      const db = a.b - b.b;
+      return Math.sqrt(dr * dr + dg * dg + db * db) / 442;
+    }
 
-      function drawOverlay(bbox) {
-        overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-        overlayCtx.strokeStyle = 'rgba(0, 214, 255, 0.85)';
-        overlayCtx.lineWidth = 4;
-        overlayCtx.setLineDash([12, 8]);
-        overlayCtx.strokeRect(bbox.originX, bbox.originY, bbox.width, bbox.height);
-        overlayCtx.setLineDash([]);
+    function chooseDetection(detections) {
+      if (!detections || detections.length === 0) {
+        return null;
+      }
+      let bestDetection = null;
+      let bestProfile = null;
+      let bestScore = Number.POSITIVE_INFINITY;
+      const hasTarget = Boolean(targetProfile);
+      for (const detection of detections) {
+        if (!detection.boundingBox) {
+          continue;
+        }
+        const bbox = detection.boundingBox;
+        const profile = analyzeClothing(bbox);
         const centerX = bbox.originX + bbox.width / 2;
         const centerY = bbox.originY + bbox.height / 2;
-        overlayCtx.fillStyle = 'rgba(0, 214, 255, 0.85)';
-        overlayCtx.beginPath();
-        overlayCtx.arc(centerX, centerY, 6, 0, Math.PI * 2);
-        overlayCtx.fill();
-      }
-
-      function computeMovement(bbox) {
-        const frameWidth = overlay.width || 1;
-        const frameHeight = overlay.height || 1;
-        const centerX = bbox.originX + bbox.width / 2;
-        const areaRatio = (bbox.width * bbox.height) / (frameWidth * frameHeight);
-        const offset = centerX / frameWidth - 0.5;
-        const commands = [];
-
-        if (areaRatio < 0.075) {
-          commands.push('andar para frente (alvo distante)');
-        } else if (areaRatio > 0.22) {
-          commands.push('reduzir velocidade (alvo muito próximo)');
+        const areaRatio = (bbox.width * bbox.height) / Math.max(1, frameWidth * frameHeight);
+        let score;
+        if (!hasTarget) {
+          score = -areaRatio;
         } else {
-          commands.push('manter distância');
+          const colorDiff = colorDistance(profile, targetProfile);
+          const centerDist = previousCenter
+            ? Math.hypot((centerX - previousCenter.x) / frameWidth, (centerY - previousCenter.y) / frameHeight)
+            : 0;
+          const areaPenalty = targetProfile.areaRatio
+            ? Math.abs(areaRatio - targetProfile.areaRatio) * 12
+            : 0;
+          score = colorDiff * 1.4 + centerDist * 2.6 + areaPenalty;
         }
-
-        if (offset > 0.12) {
-          commands.push(areaRatio < 0.22 ? 'virar para a direita e avançar' : 'virar para a direita');
-        } else if (offset < -0.12) {
-          commands.push(areaRatio < 0.22 ? 'virar para a esquerda e avançar' : 'virar para a esquerda');
-        } else {
-          commands.push('seguir em linha reta');
+        if (score < bestScore) {
+          bestScore = score;
+          bestDetection = detection;
+          bestProfile = Object.assign({ areaRatio }, profile);
         }
-
-        return commands.join(' + ');
       }
+      return bestDetection ? { detection: bestDetection, profile: bestProfile } : null;
+    }
 
-      async function processFrame() {
-        if (!trackingActive || !detector) {
-          return;
-        }
-        ensureVideoSizing();
-        const nowInMs = performance.now();
-        if (video.currentTime === lastVideoTime) {
-          animationFrameId = requestAnimationFrame(processFrame);
-          return;
-        }
-        lastVideoTime = video.currentTime;
-        let result;
-        try {
-          result = detector.detectForVideo(video, nowInMs);
-        } catch (err) {
-          console.error('[MediaPipe] Erro durante detectForVideo', err);
-          updateStatus('Erro na detecção. Tentando novamente...', true);
-          animationFrameId = requestAnimationFrame(processFrame);
-          return;
-        }
-        overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+    function captureSnapshot(bbox) {
+      if (!snapshotCtx || !bbox) {
+        return;
+      }
+      const width = Math.max(40, Math.floor(bbox.width));
+      const height = Math.max(40, Math.floor(bbox.height));
+      snapshotCanvas.width = width;
+      snapshotCanvas.height = height;
+      try {
+        snapshotCtx.drawImage(
+          video,
+          bbox.originX,
+          bbox.originY,
+          bbox.width,
+          bbox.height,
+          0,
+          0,
+          width,
+          height
+        );
+        const dataUrl = snapshotCanvas.toDataURL('image/jpeg', 0.85);
+        snapshotImg.src = dataUrl;
+        snapshotStatus.textContent = 'Referência capturada. Mantenha a pessoa com aparência similar para continuar o rastreamento.';
+      } catch (err) {
+        console.warn('[MediaPipe] Não foi possível capturar snapshot', err);
+      }
+    }
 
-        if (!result || !result.detections || result.detections.length === 0) {
-          updateStatus('Rastreamento ativo, aguardando pessoa no enquadramento...', false);
-          movementEl.innerHTML = '<strong>Movimento previsto:</strong> aguardar.';
-          clothingEl.innerHTML = '<strong>Traje dominante:</strong> indefinido.';
-          animationFrameId = requestAnimationFrame(processFrame);
-          return;
-        }
+    function resetTargetState(message) {
+      targetProfile = null;
+      bestAreaRatio = 0;
+      previousCenter = null;
+      lostFrames = 0;
+      snapshotImg.src = PLACEHOLDER_SNAPSHOT;
+      snapshotStatus.textContent = message || 'Nenhuma referência capturada ainda. Fique de frente para a câmera durante a contagem regressiva.';
+    }
 
-        const detection = result.detections[0];
-        const bbox = detection.boundingBox;
-        drawOverlay(bbox);
-        updateStatus('Pessoa detectada. Rastreamento ativo.', false);
-
-        const clothing = analyzeClothing(bbox);
-        const movement = computeMovement(bbox);
-
-        movementEl.innerHTML = '<strong>Movimento previsto:</strong> ' + movement + '.';
-        clothingEl.innerHTML = '<strong>Traje dominante:</strong> ' + clothing.label +
-          ' (RGB ' + clothing.r + ', ' + clothing.g + ', ' + clothing.b + ').';
-
-        console.log('[MonteBot][Rastreamento] ' + movement);
+    function processFrame() {
+      if (!trackingActive || !detector) {
+        return;
+      }
+      ensureVideoSizing();
+      updateAnalysisFrame();
+      const nowInMs = performance.now();
+      if (video.currentTime === lastVideoTime) {
         animationFrameId = requestAnimationFrame(processFrame);
+        return;
       }
+      lastVideoTime = video.currentTime;
+      let result;
+      try {
+        result = detector.detectForVideo(video, nowInMs);
+      } catch (err) {
+        console.error('[MediaPipe] Erro durante detectForVideo', err);
+        updateStatus('Erro na detecção. Tentando novamente...', true);
+        animationFrameId = requestAnimationFrame(processFrame);
+        return;
+      }
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-      async function startTracking() {
-        if (trackingActive) {
-          return;
+      const selection = chooseDetection(result && result.detections ? result.detections : []);
+      if (!selection) {
+        lostFrames += 1;
+        if (lostFrames < 30) {
+          updateStatus('Rastreamento ativo, aguardando pessoa no enquadramento...', false);
+        } else if (lostFrames < 120) {
+          updateStatus('Alvo temporariamente fora de vista. Reposicione-se em frente à câmera.', true);
+        } else {
+          updateStatus('Alvo perdido. Clique novamente para reiniciar ou retorne ao quadro.', true);
         }
-        startBtn.disabled = true;
-        updateStatus('Preparando rastreamento...', false);
-        const detectorPromise = ensureDetector();
-        try {
-          for (let seconds = 5; seconds > 0; seconds--) {
-            updateStatus('Iniciando detecção em ' + seconds + ' segundo' + (seconds === 1 ? '' : 's') + '...', false);
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-          }
-          await detectorPromise;
-        } catch (err) {
-          console.error(err);
+        movementEl.innerHTML = '<strong>Movimento previsto:</strong> aguardar.';
+        clothingEl.innerHTML = '<strong>Traje dominante:</strong> indefinido.';
+        if (lostFrames > 180) {
+          resetTargetState('Alvo perdido. Clique em "Ativar Rastreamento" para começar de novo.');
           trackingActive = false;
           startBtn.disabled = false;
-          updateStatus('Não foi possível ativar o rastreamento. Veja o console para detalhes.', true);
-          return;
+          startBtn.textContent = 'Ativar Rastreamento novamente';
         }
-        trackingActive = true;
-        updateStatus('Rastreamento ativo. Aguardando a pessoa entrar no quadro.', false);
-        movementEl.innerHTML = '<strong>Movimento previsto:</strong> aguardando pessoa.';
-        clothingEl.innerHTML = '<strong>Traje dominante:</strong> indefinido.';
-        lastVideoTime = -1;
         animationFrameId = requestAnimationFrame(processFrame);
-        startBtn.textContent = 'Rastreamento em andamento';
+        return;
       }
 
-      video.addEventListener('loadedmetadata', ensureVideoSizing);
-      window.addEventListener('resize', ensureVideoSizing);
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden && animationFrameId) {
-          cancelAnimationFrame(animationFrameId);
-          animationFrameId = 0;
-        } else if (!document.hidden && trackingActive) {
-          animationFrameId = requestAnimationFrame(processFrame);
-        }
-      });
+      lostFrames = 0;
+      const { detection, profile } = selection;
+      const bbox = detection.boundingBox;
+      previousCenter = {
+        x: bbox.originX + bbox.width / 2,
+        y: bbox.originY + bbox.height / 2
+      };
+      drawOverlay(bbox);
+      updateStatus('Pessoa detectada. Rastreamento ativo.', false);
 
-      startBtn.addEventListener('click', startTracking);
-      loadStream();
-    })();
+      const movement = computeMovement(bbox);
+      movementEl.innerHTML = '<strong>Movimento previsto:</strong> ' + movement + '.';
+      clothingEl.innerHTML = '<strong>Traje dominante:</strong> ' + profile.label +
+        ' (RGB ' + profile.r + ', ' + profile.g + ', ' + profile.b + ').';
+
+      if (!targetProfile) {
+        targetProfile = Object.assign({}, profile);
+        bestAreaRatio = profile.areaRatio || 0;
+        captureSnapshot(bbox);
+      } else {
+        const blend = 0.3;
+        targetProfile.r = Math.round(targetProfile.r * (1 - blend) + profile.r * blend);
+        targetProfile.g = Math.round(targetProfile.g * (1 - blend) + profile.g * blend);
+        targetProfile.b = Math.round(targetProfile.b * (1 - blend) + profile.b * blend);
+        targetProfile.areaRatio = targetProfile.areaRatio
+          ? targetProfile.areaRatio * (1 - blend) + (profile.areaRatio || 0) * blend
+          : profile.areaRatio || targetProfile.areaRatio;
+        targetProfile.label = profile.label;
+        if (profile.areaRatio && profile.areaRatio > bestAreaRatio * 1.1 && colorDistance(profile, targetProfile) < 0.4) {
+          bestAreaRatio = profile.areaRatio;
+          captureSnapshot(bbox);
+        }
+      }
+
+      console.log('[MonteBot][Rastreamento]', movement);
+      animationFrameId = requestAnimationFrame(processFrame);
+    }
+
+    async function startTracking() {
+      if (trackingActive) {
+        return;
+      }
+      startBtn.disabled = true;
+      startBtn.textContent = 'Preparando...';
+      resetTargetState('Capturando referência em breve. Mantenha a pessoa centralizada durante a contagem regressiva.');
+      updateStatus('Preparando rastreamento...', false);
+      let detectorPromise;
+      try {
+        detectorPromise = ensureDetector();
+      } catch (err) {
+        console.error(err);
+        trackingActive = false;
+        startBtn.disabled = false;
+        startBtn.textContent = 'Ativar Rastreamento';
+        updateStatus('Não foi possível ativar o rastreamento. Veja o console para detalhes.', true);
+        return;
+      }
+
+      try {
+        for (let seconds = 5; seconds > 0; seconds--) {
+          updateStatus('Iniciando detecção em <strong>' + seconds + '</strong> segundo' + (seconds === 1 ? '' : 's') + '...', false);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        await detectorPromise;
+      } catch (err) {
+        console.error(err);
+        trackingActive = false;
+        startBtn.disabled = false;
+        startBtn.textContent = 'Ativar Rastreamento';
+        updateStatus('Não foi possível ativar o rastreamento. Veja o console para detalhes.', true);
+        return;
+      }
+
+      trackingActive = true;
+      updateStatus('Rastreamento ativo. Aguardando a pessoa entrar no quadro.', false);
+      movementEl.innerHTML = '<strong>Movimento previsto:</strong> aguardando pessoa.';
+      clothingEl.innerHTML = '<strong>Traje dominante:</strong> indefinido.';
+      lastVideoTime = -1;
+      animationFrameId = requestAnimationFrame(processFrame);
+      startBtn.textContent = 'Rastreamento em andamento';
+    }
+
+    video.addEventListener('loadedmetadata', ensureVideoSizing);
+    window.addEventListener('resize', ensureVideoSizing);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = 0;
+      } else if (!document.hidden && trackingActive) {
+        animationFrameId = requestAnimationFrame(processFrame);
+      }
+    });
+
+    resetTargetState();
+    startBtn.addEventListener('click', startTracking);
+    loadStream();
   </script>
 </body>
 </html>
