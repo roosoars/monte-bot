@@ -129,46 +129,6 @@ EOF
   systemctl start hotspot-rfkill-unblock.service
 }
 
-configure_hostapd_dropin() {
-  local wait_script="/usr/local/sbin/hotspot-wait-wlan.sh"
-  local dropin_dir="/etc/systemd/system/hostapd.service.d"
-  local dropin_file="${dropin_dir}/hotspot.conf"
-
-  cat <<'EOF' >"${wait_script}"
-#!/usr/bin/env bash
-set -euo pipefail
-
-iface="${1:-wlan0}"
-tries=15
-
-for _ in $(seq 1 "${tries}"); do
-  if ip link show "${iface}" >/dev/null 2>&1; then
-    ip link set "${iface}" up >/dev/null 2>&1 || true
-    exit 0
-  fi
-  sleep 2
-done
-
-echo "[WARN] Interface ${iface} not ready; continuing anyway." >&2
-exit 0
-EOF
-  chmod 755 "${wait_script}"
-
-  mkdir -p "${dropin_dir}"
-  cat <<EOF >"${dropin_file}"
-[Unit]
-After=hotspot-rfkill-unblock.service dhcpcd.service network-pre.target
-Wants=hotspot-rfkill-unblock.service
-
-[Service]
-ExecStartPre=${wait_script} ${WLAN_IFACE}
-Restart=on-failure
-RestartSec=3
-EOF
-
-  systemctl daemon-reload
-}
-
 configure_dhcpcd() {
   local marker_begin="# hotspot-setup begin"
   local marker_end="# hotspot-setup end"
@@ -275,7 +235,6 @@ main() {
   configure_sysctl
   configure_dnsmasq
   configure_hostapd
-  configure_hostapd_dropin
   configure_nginx
   restore_services
   echo "[INFO] Hotspot setup complete. Reboot to ensure all settings persist." >&2
