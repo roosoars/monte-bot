@@ -1,6 +1,6 @@
 # Monte Bot
 
-Infraestrutura de rede e visão computacional para o robô Monte Bot baseada em Raspberry Pi OS (Bookworm). Este repositório reúne os scripts de provisionamento necessários para disponibilizar um hotspot Wi-Fi dedicado, servir uma interface web hospedada localmente e expor um streaming HLS com sobreposições de rastreamento executadas no navegador.
+Infraestrutura de rede e visão computacional para o robô R2D2 desenvolvido pelo liga academica MONTE BOT (Universidade Federal de Uberlândia) baseada em Raspberry Pi OS (Bookworm). Este repositório reúne os scripts de provisionamento necessários para disponibilizar um hotspot Wi-Fi dedicado, servir uma interface web hospedada localmente e expor um streaming HLS com sobreposições de rastreamento executadas no navegador.
 
 ## Visão geral
 
