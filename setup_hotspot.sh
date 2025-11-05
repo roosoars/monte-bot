@@ -134,11 +134,11 @@ configure_hostapd_dropin() {
   local dropin_dir="/etc/systemd/system/hostapd.service.d"
   local dropin_file="${dropin_dir}/hotspot.conf"
 
-  cat <<EOF >"${wait_script}"
+  cat <<'EOF' >"${wait_script}"
 #!/usr/bin/env bash
 set -euo pipefail
 
-iface="${WLAN_IFACE}"
+iface="${1:-wlan0}"
 tries=15
 
 for _ in $(seq 1 "${tries}"); do
@@ -161,7 +161,7 @@ After=hotspot-rfkill-unblock.service dhcpcd.service network-pre.target
 Wants=hotspot-rfkill-unblock.service
 
 [Service]
-ExecStartPre=${wait_script}
+ExecStartPre=${wait_script} ${WLAN_IFACE}
 Restart=on-failure
 RestartSec=3
 EOF
