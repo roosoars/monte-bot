@@ -208,7 +208,12 @@ EOF
 }
 
 update_web_page() {
-  cat <<'EOF' >/var/www/html/index.html
+  # Use the external script to create web pages
+  bash "${SCRIPT_DIR}/create_web_pages.sh"
+  return 0
+
+  # Legacy page code (kept for reference, not executed)
+  cat <<'EOF' >/var/www/html/index.html.old
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>

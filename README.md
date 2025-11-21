@@ -125,12 +125,42 @@ sudo systemctl restart rpicam-hls.service
 - **Stream sem vídeo**: confirme que a câmera está detectada (`libcamera-hello`). Erros comuns aparecem em `journalctl -u rpicam-hls.service`.  
 - **Interface web sem UI**: valide se os assets foram copiados para `/var/www/html/static`. Em ambientes sem internet, garanta que a pasta `assets/` permaneça intacta antes da execução do script.
 
+## Novas funcionalidades
+
+### Interface web aprimorada
+
+O sistema agora inclui duas páginas web para controle do robô:
+
+1. **Página de configuração** (`/index.html`)
+   - Menu principal com acesso às funcionalidades do sistema
+   - Acesso rápido ao modo Live, Configurações e Calibração
+   - Exibe informações de rede e IP do robô
+
+2. **Página Live** (`/live.html`)
+   - Interface de controle em tempo real otimizada para smartphones em modo paisagem
+   - Stream de vídeo HLS em tela cheia
+   - Controle por slide horizontal para ajustes direcionais precisos
+   - Joystick virtual para movimentação completa (frente, trás, esquerda, direita)
+   - Detecção automática de pessoas usando MediaPipe
+   - Indicador de status que mostra o movimento sugerido baseado na posição da pessoa detectada
+   - Lógica de parada automática quando a pessoa está a aproximadamente 2 metros (área maior que 20% do quadro)
+   - Overlays visuais mostrando a caixa delimitadora da pessoa detectada
+
+### Melhorias no startup do hotspot
+
+O script `setup_hotspot.sh` agora inclui um serviço de inicialização sequenciado (`hotspot-startup.service`) que:
+- Aguarda o sistema estar completamente pronto antes de iniciar os serviços
+- Inicia os serviços na ordem correta: dhcpcd → dnsmasq → hostapd → nginx
+- Adiciona delays entre cada inicialização para garantir estabilidade
+- Previne falhas de inicialização causadas por condições de corrida
+
 ## Estrutura do repositório
 
 ```
 assets/                     # Bibliotecas, modelos e WASM empacotados para uso offline
 setup_hotspot.sh            # Script de provisionamento do hotspot / nginx
 setup_camera_stream.sh      # Script de streaming HLS e interface web
+create_web_pages.sh         # Script para criação das páginas web do sistema
 ```
 
 Mantenha o repositório versionado juntamente com a configuração do robô para facilitar auditoria e replicação do ambiente em novas unidades.

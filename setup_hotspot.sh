@@ -129,6 +129,54 @@ EOF
   systemctl start hotspot-rfkill-unblock.service
 }
 
+configure_hotspot_startup() {
+  local startup_script="/usr/local/sbin/hotspot-startup.sh"
+  local startup_unit="/etc/systemd/system/hotspot-startup.service"
+
+  cat <<'EOF' >"${startup_script}"
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wait for system to be fully ready
+sleep 5
+
+# Ensure dhcpcd is running
+systemctl start dhcpcd || true
+sleep 2
+
+# Start dnsmasq
+systemctl start dnsmasq || true
+sleep 1
+
+# Start hostapd
+systemctl start hostapd || true
+sleep 1
+
+# Start nginx
+systemctl start nginx || true
+
+exit 0
+EOF
+  chmod 755 "${startup_script}"
+
+  cat <<'EOF' >"${startup_unit}"
+[Unit]
+Description=Hotspot Startup Sequencer
+After=network.target hotspot-rfkill-unblock.service dhcpcd.service
+Wants=network.target hotspot-rfkill-unblock.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hotspot-startup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable hotspot-startup.service
+}
+
 configure_dhcpcd() {
   local marker_begin="# hotspot-setup begin"
   local marker_end="# hotspot-setup end"
@@ -217,10 +265,17 @@ EOF
 
 restore_services() {
   systemctl unmask hostapd || true
-  systemctl enable hostapd dnsmasq
+  systemctl enable dhcpcd
+  systemctl enable hostapd
+  systemctl enable dnsmasq
+  systemctl enable nginx
   systemctl restart dhcpcd
+  sleep 2
   systemctl restart dnsmasq
+  sleep 1
   systemctl restart hostapd
+  sleep 1
+  systemctl restart nginx
 }
 
 main() {
@@ -231,6 +286,7 @@ main() {
   install_packages
   ensure_dhcpcd
   configure_rfkill_unit
+  configure_hotspot_startup
   configure_dhcpcd
   configure_sysctl
   configure_dnsmasq
