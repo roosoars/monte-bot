@@ -169,6 +169,14 @@ create_index_page() {
         <span class="menu-item-icon">▶</span>
       </a>
 
+      <a href="/position.html" class="menu-item">
+        <div class="menu-item-content">
+          <div class="menu-item-title">Posição</div>
+          <div class="menu-item-desc">Comandos em tempo real para motores (P, F, E, D, T)</div>
+        </div>
+        <span class="menu-item-icon">📡</span>
+      </a>
+
       <div class="menu-item" onclick="alert('Calibração em desenvolvimento')">
         <div class="menu-item-content">
           <div class="menu-item-title">Calibração</div>
@@ -179,7 +187,7 @@ create_index_page() {
     </nav>
 
     <div class="info-box">
-      <p><strong>Dica:</strong> Configure primeiro o alvo em "Configurar Alvo", depois use "Live" para seguir.</p>
+      <p><strong>Dica:</strong> Configure o alvo, use "Live" para rastrear e "Posição" para comandos de motor.</p>
       <p><strong>Rede:</strong> Conectado ao hotspot MonteHotspot</p>
       <p><strong>IP:</strong> 192.168.50.1</p>
       <div id="target-status" class="target-status no-target">
@@ -1048,7 +1056,8 @@ create_live_page() {
     let frameWidth = 1920;
     let frameHeight = 1080;
     let lostFrames = 0;
-    const MIN_DISTANCE_AREA = 0.20;
+    const MIN_DISTANCE_AREA = 0.20;  // Stop at ~2m distance
+    const MAX_DISTANCE_AREA = 0.30;  // Back up when too close
 
     const analysisCanvas = document.createElement('canvas');
     const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
@@ -1345,9 +1354,11 @@ create_live_page() {
     }
 
     function computeMovement(bbox) {
+      let cmd = 'P';
       if (!bbox) {
-        detectionStatus.textContent = 'P';
-        console.log('[MonteBot] P');
+        detectionStatus.textContent = cmd;
+        localStorage.setItem('montebot_position', cmd);
+        console.log('[MonteBot] ' + cmd);
         return;
       }
       const frameArea = Math.max(1, frameWidth * frameHeight);
@@ -1355,22 +1366,30 @@ create_live_page() {
       const areaRatio = (bbox.width * bbox.height) / frameArea;
       const offset = centerX / frameWidth - 0.5;
 
-      if (areaRatio >= MIN_DISTANCE_AREA) {
-        detectionStatus.textContent = 'P';
-        console.log('[MonteBot] P');
-        return;
+      // Too close - back up (T = Trás)
+      if (areaRatio >= MAX_DISTANCE_AREA) {
+        cmd = 'T';
+      }
+      // Good distance - stop (P = Parado)
+      else if (areaRatio >= MIN_DISTANCE_AREA) {
+        cmd = 'P';
+      }
+      // Person is to the right - turn right (D = Direita)
+      else if (offset > 0.10) {
+        cmd = 'D';
+      }
+      // Person is to the left - turn left (E = Esquerda)
+      else if (offset < -0.10) {
+        cmd = 'E';
+      }
+      // Person is centered - go forward (F = Frente)
+      else {
+        cmd = 'F';
       }
 
-      if (offset > 0.12) {
-        detectionStatus.textContent = 'D';
-        console.log('[MonteBot] D');
-      } else if (offset < -0.12) {
-        detectionStatus.textContent = 'E';
-        console.log('[MonteBot] E');
-      } else {
-        detectionStatus.textContent = 'F';
-        console.log('[MonteBot] F');
-      }
+      detectionStatus.textContent = cmd;
+      localStorage.setItem('montebot_position', cmd);
+      console.log('[MonteBot] ' + cmd);
     }
 
     function processFrame() {
@@ -1392,6 +1411,7 @@ create_live_page() {
         if (lostFrames > 30) {
           overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
           detectionStatus.textContent = 'P';
+          localStorage.setItem('montebot_position', 'P');
           console.log('[MonteBot] P');
         }
         animationFrameId = requestAnimationFrame(processFrame);
@@ -1403,6 +1423,7 @@ create_live_page() {
       if (!selection) {
         overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
         detectionStatus.textContent = 'P';
+        localStorage.setItem('montebot_position', 'P');
         console.log('[MonteBot] P');
         animationFrameId = requestAnimationFrame(processFrame);
         return;
@@ -1436,9 +1457,211 @@ LIVEEOF
   chmod 644 /var/www/html/live.html
 }
 
+create_position_page() {
+  cat <<'POSITIONEOF' >/var/www/html/position.html
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Monte Bot - Posição</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' ry='12' fill='%23002233'/%3E%3Cpath d='M16 42l8-20h4l8 20h-4l-1.8-5.2h-9.2L20 42zm7.4-8.4h6.4L27 24.4zM40 22h4v20h-4z' fill='%2300c6ff'/%3E%3C/svg%3E" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #000;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    #position-display {
+      font-size: 40vw;
+      font-weight: 900;
+      color: #00c6ff;
+      text-shadow: 0 0 60px rgba(0, 198, 255, 0.6);
+      line-height: 1;
+      transition: color 0.1s ease;
+    }
+    #position-display.cmd-F { color: #00ff00; }
+    #position-display.cmd-T { color: #ff4444; }
+    #position-display.cmd-D { color: #ffaa00; }
+    #position-display.cmd-E { color: #ffaa00; }
+    #position-display.cmd-P { color: #888888; }
+    #info {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      font-size: 0.9rem;
+      color: rgba(255, 255, 255, 0.5);
+    }
+    #info p { margin: 5px 0; }
+    #legend {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid rgba(0, 198, 255, 0.3);
+      border-radius: 10px;
+      padding: 15px;
+      font-size: 0.85rem;
+    }
+    #legend h3 {
+      color: #00c6ff;
+      margin-bottom: 10px;
+      font-size: 1rem;
+    }
+    #legend ul {
+      list-style: none;
+      padding: 0;
+    }
+    #legend li {
+      margin: 8px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #legend .code {
+      display: inline-block;
+      width: 30px;
+      height: 30px;
+      line-height: 30px;
+      text-align: center;
+      border-radius: 5px;
+      font-weight: 700;
+    }
+    #legend .code-F { background: #00ff00; color: #000; }
+    #legend .code-T { background: #ff4444; color: #fff; }
+    #legend .code-D { background: #ffaa00; color: #000; }
+    #legend .code-E { background: #ffaa00; color: #000; }
+    #legend .code-P { background: #888888; color: #fff; }
+    #back-link {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid rgba(0, 198, 255, 0.5);
+      color: #00c6ff;
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      text-decoration: none;
+      transition: all 0.3s ease;
+    }
+    #back-link:hover {
+      background: rgba(0, 198, 255, 0.2);
+    }
+    #status-indicator {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.9rem;
+    }
+    #status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #888;
+      animation: pulse 1.5s infinite;
+    }
+    #status-dot.active { background: #00ff00; }
+    #status-dot.inactive { background: #ff4444; animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <div id="status-indicator">
+    <div id="status-dot"></div>
+    <span id="status-text">Aguardando dados...</span>
+  </div>
+
+  <div id="position-display">P</div>
+
+  <div id="legend">
+    <h3>Legenda</h3>
+    <ul>
+      <li><span class="code code-F">F</span> Frente (avançar)</li>
+      <li><span class="code code-T">T</span> Trás (recuar)</li>
+      <li><span class="code code-D">D</span> Direita (virar)</li>
+      <li><span class="code code-E">E</span> Esquerda (virar)</li>
+      <li><span class="code code-P">P</span> Parado (manter)</li>
+    </ul>
+  </div>
+
+  <div id="info">
+    <p>Esta página exibe o comando de posição em tempo real.</p>
+    <p>Abra a página <strong>/live.html</strong> em outro dispositivo para gerar os comandos.</p>
+  </div>
+
+  <a id="back-link" href="/">← Menu</a>
+
+  <script>
+    const display = document.getElementById('position-display');
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    let lastUpdate = 0;
+    let lastPosition = 'P';
+    let updateCount = 0;
+    const UPDATE_INTERVAL_MS = 1000 / 30;  // 30fps refresh rate
+
+    function updateDisplay() {
+      const position = localStorage.getItem('montebot_position') || 'P';
+      const now = Date.now();
+
+      // Check if data is being updated
+      if (position !== lastPosition) {
+        lastPosition = position;
+        lastUpdate = now;
+        updateCount++;
+      }
+
+      // Update display
+      display.textContent = position;
+      display.className = 'cmd-' + position;
+
+      // Update status indicator
+      const timeSinceUpdate = now - lastUpdate;
+      if (lastUpdate === 0) {
+        statusDot.className = '';
+        statusText.textContent = 'Aguardando dados...';
+      } else if (timeSinceUpdate < 5000) {
+        statusDot.className = 'active';
+        statusText.textContent = 'Recebendo dados (' + updateCount + ' comandos)';
+      } else {
+        statusDot.className = 'inactive';
+        statusText.textContent = 'Sem atualizações há ' + Math.round(timeSinceUpdate / 1000) + 's';
+      }
+
+      // Output to console for motor integration
+      console.log('[MonteBot][Position] ' + position);
+    }
+
+    // Update at 30fps for smooth real-time display
+    setInterval(updateDisplay, UPDATE_INTERVAL_MS);
+
+    // Initial update
+    updateDisplay();
+  </script>
+</body>
+</html>
+POSITIONEOF
+  chown www-data:www-data /var/www/html/position.html
+  chmod 644 /var/www/html/position.html
+}
+
 # Executar criação das páginas
 create_index_page
 create_config_page
 create_live_page
+create_position_page
 
 echo "[INFO] Páginas web criadas com sucesso."
