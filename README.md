@@ -163,11 +163,11 @@ Se o hotspot WiFi não estiver iniciando automaticamente quando o Raspberry Pi �
 
 ### Interface web aprimorada
 
-O sistema agora inclui duas páginas web para controle do robô:
+O sistema agora inclui páginas web para controle do robô:
 
 1. **Página de configuração** (`/index.html`)
    - Menu principal com acesso às funcionalidades do sistema
-   - Acesso rápido ao modo Live, Configurações e Calibração
+   - Acesso rápido ao modo Live, Configurações, Posição e Calibração
    - Exibe informações de rede e IP do robô
 
 2. **Página Live** (`/live.html`)
@@ -178,7 +178,15 @@ O sistema agora inclui duas páginas web para controle do robô:
    - Detecção automática de pessoas usando MediaPipe
    - Indicador de status que mostra o movimento sugerido baseado na posição da pessoa detectada
    - Lógica de parada automática quando a pessoa está a aproximadamente 2 metros (área maior que 20% do quadro)
+   - Lógica de recuo quando a pessoa está muito próxima (área maior que 30% do quadro)
    - Overlays visuais mostrando a caixa delimitadora da pessoa detectada
+
+3. **Página de Posição** (`/position.html`)
+   - Exibe em tempo real o comando de direção para os motores
+   - Comandos: **P** (Parado), **F** (Frente), **T** (Trás), **D** (Direita), **E** (Esquerda)
+   - Ideal para integração com sistema de controle de motores
+   - Lê dados do localStorage compartilhado com a página Live
+   - Pode ser acessada em dispositivo separado para enviar comandos aos motores
 
 ### Melhorias no startup do hotspot
 
