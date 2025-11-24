@@ -1056,7 +1056,8 @@ create_live_page() {
     let frameWidth = 1920;
     let frameHeight = 1080;
     let lostFrames = 0;
-    const MIN_DISTANCE_AREA = 0.20;
+    const MIN_DISTANCE_AREA = 0.20;  // Stop at ~2m distance
+    const MAX_DISTANCE_AREA = 0.30;  // Back up when too close
 
     const analysisCanvas = document.createElement('canvas');
     const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
@@ -1366,7 +1367,7 @@ create_live_page() {
       const offset = centerX / frameWidth - 0.5;
 
       // Too close - back up (T = Trás)
-      if (areaRatio >= 0.30) {
+      if (areaRatio >= MAX_DISTANCE_AREA) {
         cmd = 'T';
       }
       // Good distance - stop (P = Parado)
@@ -1610,6 +1611,7 @@ create_position_page() {
     let lastUpdate = 0;
     let lastPosition = 'P';
     let updateCount = 0;
+    const UPDATE_INTERVAL_MS = 1000 / 30;  // 30fps refresh rate
 
     function updateDisplay() {
       const position = localStorage.getItem('montebot_position') || 'P';
@@ -1644,7 +1646,7 @@ create_position_page() {
     }
 
     // Update at 30fps for smooth real-time display
-    setInterval(updateDisplay, 33);
+    setInterval(updateDisplay, UPDATE_INTERVAL_MS);
 
     // Initial update
     updateDisplay();
