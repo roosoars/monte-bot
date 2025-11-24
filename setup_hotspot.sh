@@ -137,38 +137,178 @@ configure_hotspot_startup() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Wait for system to be fully ready
-sleep 5
+WLAN_IFACE="${WLAN_IFACE:-wlan0}"
+MAX_WAIT=60
+LOG_TAG="hotspot-startup"
 
-# Ensure dhcpcd is running
-systemctl start dhcpcd || true
-sleep 2
+log_info() {
+  echo "[INFO] $1"
+  logger -t "${LOG_TAG}" "[INFO] $1"
+}
 
-# Start dnsmasq
-systemctl start dnsmasq || true
-sleep 1
+log_error() {
+  echo "[ERROR] $1" >&2
+  logger -t "${LOG_TAG}" "[ERROR] $1"
+}
 
-# Start hostapd
-systemctl start hostapd || true
-sleep 1
+# Wait for wireless interface to be available
+wait_for_interface() {
+  log_info "Waiting for interface ${WLAN_IFACE} to be available..."
+  local count=0
+  while [[ ! -d "/sys/class/net/${WLAN_IFACE}" ]]; do
+    if [[ ${count} -ge ${MAX_WAIT} ]]; then
+      log_error "Interface ${WLAN_IFACE} not found after ${MAX_WAIT} seconds"
+      return 1
+    fi
+    sleep 1
+    count=$((count + 1))
+  done
+  log_info "Interface ${WLAN_IFACE} found after ${count} seconds"
+  return 0
+}
 
-# Start nginx
-systemctl start nginx || true
+# Ensure rfkill is unblocked
+unblock_rfkill() {
+  log_info "Unblocking rfkill for wireless devices..."
+  for rf_path in /sys/class/rfkill/rfkill*; do
+    [[ -d ${rf_path} ]] || continue
+    # Only unblock soft blocks (hardware blocks cannot be controlled by software)
+    if [[ -w "${rf_path}/soft" ]]; then
+      echo 0 >"${rf_path}/soft" 2>/dev/null || true
+    fi
+  done
+  # Also use rfkill command if available
+  command -v rfkill >/dev/null 2>&1 && rfkill unblock all || true
+  log_info "rfkill unblock completed"
+}
 
-exit 0
+# Wait for interface to be ready for configuration
+wait_for_interface_ready() {
+  log_info "Waiting for interface ${WLAN_IFACE} to be ready..."
+  local count=0
+  while ! ip link show "${WLAN_IFACE}" >/dev/null 2>&1; do
+    if [[ ${count} -ge ${MAX_WAIT} ]]; then
+      log_error "Interface ${WLAN_IFACE} not ready after ${MAX_WAIT} seconds"
+      return 1
+    fi
+    sleep 1
+    count=$((count + 1))
+  done
+  log_info "Interface ${WLAN_IFACE} ready after ${count} seconds"
+  return 0
+}
+
+# Bring interface up
+bring_interface_up() {
+  log_info "Bringing interface ${WLAN_IFACE} up..."
+  ip link set "${WLAN_IFACE}" up 2>/dev/null || true
+  sleep 2
+}
+
+# Start service with retry logic
+start_service_with_retry() {
+  local service=$1
+  local max_retries=3
+  local retry=0
+
+  while [[ ${retry} -lt ${max_retries} ]]; do
+    log_info "Starting ${service} (attempt $((retry + 1))/${max_retries})..."
+    if systemctl start "${service}"; then
+      log_info "${service} started successfully"
+      return 0
+    fi
+    retry=$((retry + 1))
+    sleep 2
+  done
+
+  log_error "Failed to start ${service} after ${max_retries} attempts"
+  return 1
+}
+
+# Main startup sequence
+main() {
+  log_info "Starting hotspot startup sequence..."
+
+  # Wait for wireless interface
+  if ! wait_for_interface; then
+    log_error "Failed waiting for wireless interface"
+    exit 1
+  fi
+
+  # Unblock rfkill
+  unblock_rfkill
+
+  # Wait for interface to be ready
+  if ! wait_for_interface_ready; then
+    log_error "Failed waiting for interface to be ready"
+    exit 1
+  fi
+
+  # Bring interface up
+  bring_interface_up
+
+  # Stop services if they are running (to ensure clean start)
+  log_info "Stopping services for clean start..."
+  systemctl stop hostapd 2>/dev/null || true
+  systemctl stop dnsmasq 2>/dev/null || true
+  sleep 1
+
+  # Start dhcpcd to configure the static IP
+  log_info "Ensuring dhcpcd is running..."
+  systemctl start dhcpcd || true
+  sleep 3
+
+  # Wait for IPv4 address to be configured
+  log_info "Waiting for IP configuration on ${WLAN_IFACE}..."
+  local ip_wait=0
+  while ! ip addr show "${WLAN_IFACE}" 2>/dev/null | grep -q 'inet [0-9]'; do
+    if [[ ${ip_wait} -ge 30 ]]; then
+      log_error "IP not configured on ${WLAN_IFACE} after 30 seconds"
+      break
+    fi
+    sleep 1
+    ip_wait=$((ip_wait + 1))
+  done
+
+  # Start dnsmasq
+  start_service_with_retry dnsmasq || true
+  sleep 2
+
+  # Start hostapd
+  start_service_with_retry hostapd || true
+  sleep 2
+
+  # Start nginx
+  start_service_with_retry nginx || true
+
+  log_info "Hotspot startup sequence completed"
+  
+  # Log final status
+  log_info "Service status:"
+  log_info "  dhcpcd: $(systemctl is-active dhcpcd)"
+  log_info "  dnsmasq: $(systemctl is-active dnsmasq)"
+  log_info "  hostapd: $(systemctl is-active hostapd)"
+  log_info "  nginx: $(systemctl is-active nginx)"
+
+  exit 0
+}
+
+main "$@"
 EOF
   chmod 755 "${startup_script}"
 
   cat <<'EOF' >"${startup_unit}"
 [Unit]
 Description=Hotspot Startup Sequencer
-After=network.target hotspot-rfkill-unblock.service dhcpcd.service
-Wants=network.target hotspot-rfkill-unblock.service
+After=local-fs.target sysinit.target hotspot-rfkill-unblock.service
+Wants=hotspot-rfkill-unblock.service
+Before=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/hotspot-startup.sh
 RemainAfterExit=yes
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

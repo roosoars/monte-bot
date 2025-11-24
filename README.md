@@ -120,6 +120,40 @@ sudo systemctl restart rpicam-hls.service
 
 ## Solução de problemas
 
+### Hotspot não inicia automaticamente ao ligar
+
+Se o hotspot WiFi não estiver iniciando automaticamente quando o Raspberry Pi é ligado:
+
+1. **Ver logs do serviço de startup:**
+   ```bash
+   sudo journalctl -u hotspot-startup.service -b
+   ```
+
+2. **Ver logs do hostapd:**
+   ```bash
+   sudo journalctl -u hostapd -b
+   ```
+
+3. **Reiniciar o serviço de hotspot manualmente:**
+   ```bash
+   sudo systemctl restart hotspot-startup.service
+   ```
+
+4. **Ou reiniciar serviços individualmente:**
+   ```bash
+   sudo systemctl restart dhcpcd
+   sudo systemctl restart dnsmasq
+   sudo systemctl restart hostapd
+   sudo systemctl restart nginx
+   ```
+
+5. **Verificar status de todos os serviços:**
+   ```bash
+   systemctl status hostapd dnsmasq nginx dhcpcd hotspot-startup.service
+   ```
+
+### Outros problemas comuns
+
 - **Hotspot não aparece**: verifique se `rfkill list` está liberado. O script já mascara serviços relacionados; execute `sudo rfkill unblock all` como medida adicional.  
 - **Serviço `hostapd` falha**: revise `/etc/hostapd/hostapd.conf` para conferir SSID/senha válidos e execute `sudo journalctl -u hostapd -b`.  
 - **Stream sem vídeo**: confirme que a câmera está detectada (`libcamera-hello`). Erros comuns aparecem em `journalctl -u rpicam-hls.service`.  
