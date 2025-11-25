@@ -460,10 +460,16 @@ create_config_page() {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = source;
         video.addEventListener('loadeddata', () => {
+          video.play().catch((err) => {
+            console.warn('[MonteBot] Autoplay bloqueado pelo navegador:', err);
+          });
           updateStatus('Câmera pronta. Clique em "Detectar Pessoa".', 'success');
           ensureVideoSizing();
           detectBtn.disabled = false;
           checkSavedTarget();
+        });
+        video.addEventListener('error', () => {
+          updateStatus('Erro ao carregar stream da câmera. Verifique o serviço rpicam-hls.', 'error');
         });
         return;
       }
@@ -499,6 +505,11 @@ create_config_page() {
           ensureVideoSizing();
           detectBtn.disabled = false;
           checkSavedTarget();
+        });
+        hls.on(Hls.Events.ERROR, function (event, data) {
+          if (data.fatal) {
+            updateStatus('Erro no stream: ' + data.details, 'error');
+          }
         });
       };
       script.src = 'static/hls.min.js';
@@ -1265,8 +1276,14 @@ create_live_page() {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = source;
         video.addEventListener('loadeddata', () => {
+          video.play().catch((err) => {
+            console.warn('[MonteBot] Autoplay bloqueado pelo navegador:', err);
+          });
           ensureVideoSizing();
           initTracking();
+        });
+        video.addEventListener('error', () => {
+          console.error('[MonteBot] Erro ao carregar stream da câmera');
         });
         return;
       }
@@ -1280,7 +1297,7 @@ create_live_page() {
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: true,
-          backBufferLength: 0.5,           // Minimal back buffer for stability           // No back buffer
+          backBufferLength: 0.5,           // Minimal back buffer for stability
           maxBufferLength: 1,            // Minimal buffer (1 second max)
           maxMaxBufferLength: 2,         // Hard limit on buffer
           liveSyncDurationCount: 1,      // Sync to 1 segment behind live
@@ -1377,6 +1394,8 @@ create_live_page() {
     // JOYSTICK CONTROL
     let isDraggingJoystick = false;
     let lastJoystickCmd = 'P';
+    let joystickInterval = null;
+    const JOYSTICK_SEND_INTERVAL = 100; // Send command every 100ms while held
 
     function updateJoystickPosition(clientX, clientY) {
       const container = joystickHandle.parentElement;
@@ -1410,39 +1429,58 @@ create_live_page() {
         }
       }
       
-      if (cmd !== lastJoystickCmd) {
-        lastJoystickCmd = cmd;
-        joystickStatus.textContent = cmd;
-        sendCommand(cmd);
+      // Always update the command and status
+      lastJoystickCmd = cmd;
+      joystickStatus.textContent = cmd;
+    }
+
+    function startJoystickInterval() {
+      if (joystickInterval) return;
+      // Continuously send command while held (not on start, since position hasn't changed yet)
+      joystickInterval = setInterval(() => {
+        if (isDraggingJoystick && lastJoystickCmd !== 'P') {
+          sendCommand(lastJoystickCmd);
+        }
+      }, JOYSTICK_SEND_INTERVAL);
+    }
+
+    function stopJoystickInterval() {
+      if (joystickInterval) {
+        clearInterval(joystickInterval);
+        joystickInterval = null;
       }
     }
 
-    joystickHandle.addEventListener('mousedown', () => { isDraggingJoystick = true; });
-    joystickHandle.addEventListener('touchstart', () => { isDraggingJoystick = true; });
+    joystickHandle.addEventListener('mousedown', () => { 
+      isDraggingJoystick = true; 
+      startJoystickInterval();
+    });
+    joystickHandle.addEventListener('touchstart', () => { 
+      isDraggingJoystick = true; 
+      startJoystickInterval();
+    });
     document.addEventListener('mousemove', (e) => { if (isDraggingJoystick) updateJoystickPosition(e.clientX, e.clientY); });
     document.addEventListener('touchmove', (e) => { if (isDraggingJoystick) updateJoystickPosition(e.touches[0].clientX, e.touches[0].clientY); });
     document.addEventListener('mouseup', () => {
       if (isDraggingJoystick) {
         isDraggingJoystick = false;
+        stopJoystickInterval();
         joystickHandle.style.left = '50%';
         joystickHandle.style.top = '50%';
         joystickStatus.textContent = 'P';
-        if (lastJoystickCmd !== 'P') {
-          lastJoystickCmd = 'P';
-          sendCommand('P');
-        }
+        lastJoystickCmd = 'P';
+        sendCommand('P');
       }
     });
     document.addEventListener('touchend', () => {
       if (isDraggingJoystick) {
         isDraggingJoystick = false;
+        stopJoystickInterval();
         joystickHandle.style.left = '50%';
         joystickHandle.style.top = '50%';
         joystickStatus.textContent = 'P';
-        if (lastJoystickCmd !== 'P') {
-          lastJoystickCmd = 'P';
-          sendCommand('P');
-        }
+        lastJoystickCmd = 'P';
+        sendCommand('P');
       }
     });
 
