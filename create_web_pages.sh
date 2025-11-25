@@ -169,6 +169,13 @@ create_index_page() {
         <span class="menu-item-icon">▶</span>
       </a>
 
+      <a href="/logs.html" class="menu-item">
+        <div class="menu-item-content">
+          <div class="menu-item-title">Logs em Tempo Real</div>
+          <div class="menu-item-desc">Monitorar comunicação serial, WebSocket e comandos</div>
+        </div>
+        <span class="menu-item-icon">📋</span>
+      </a>
 
     </nav>
 
@@ -1045,14 +1052,24 @@ create_live_page() {
     // WebSocket for serial communication
     let ws = null;
     let wsReconnectTimer = null;
+    let serialConnected = false;
     const WS_URL = 'ws://' + window.location.hostname + ':8765';
 
-    function updateSerialStatus(connected) {
+    function updateSerialStatus(connected, port) {
+      serialConnected = connected;
       if (connected) {
-        serialIndicator.textContent = '🟢 Serial';
+        serialIndicator.textContent = '🟢 Serial' + (port ? ': ' + port : '');
         serialIndicator.className = 'connected';
       } else {
         serialIndicator.textContent = '🔴 Serial';
+        serialIndicator.className = 'disconnected';
+      }
+    }
+
+    function updateWsStatus(connected) {
+      // Update WS indicator in serial indicator if disconnected
+      if (!connected) {
+        serialIndicator.textContent = '🔴 WS Offline';
         serialIndicator.className = 'disconnected';
       }
     }
@@ -1061,39 +1078,82 @@ create_live_page() {
       if (ws && ws.readyState === WebSocket.OPEN) return;
       
       try {
+        console.log('[MonteBot] Conectando ao WebSocket:', WS_URL);
         ws = new WebSocket(WS_URL);
+        
         ws.onopen = () => {
           console.log('[MonteBot] WebSocket conectado');
-          updateSerialStatus(true);
+          updateWsStatus(true);
           if (wsReconnectTimer) {
             clearTimeout(wsReconnectTimer);
             wsReconnectTimer = null;
           }
         };
+        
         ws.onclose = () => {
-          console.log('[MonteBot] WebSocket desconectado, tentando reconectar...');
-          updateSerialStatus(false);
+          console.log('[MonteBot] WebSocket desconectado, tentando reconectar em 3s...');
+          updateWsStatus(false);
+          updateSerialStatus(false, null);
           ws = null;
           wsReconnectTimer = setTimeout(connectWebSocket, 3000);
         };
+        
         ws.onerror = (e) => {
           console.warn('[MonteBot] WebSocket erro:', e);
-          updateSerialStatus(false);
+          updateWsStatus(false);
         };
+        
         ws.onmessage = (e) => {
-          console.log('[MonteBot] Serial response:', e.data);
+          try {
+            const data = JSON.parse(e.data);
+            
+            // Handle status updates
+            if (data.type === 'status') {
+              if (data.serial) {
+                updateSerialStatus(data.serial.connected, data.serial.port);
+              }
+              console.log('[MonteBot] Status:', data);
+            }
+            // Handle command results
+            else if (data.type === 'command_result') {
+              console.log('[MonteBot] Comando:', data.command, 'Sucesso:', data.success);
+              if (data.serial_connected !== undefined) {
+                updateSerialStatus(data.serial_connected, null);
+              }
+            }
+            // Handle log entries
+            else if (data.type === 'log') {
+              const entry = data.entry;
+              console.log('[MonteBot][' + entry.source + '] ' + entry.message);
+              
+              // Update serial status from log entries
+              if (entry.source === 'SERIAL') {
+                if (entry.message.includes('Connected to serial') || entry.message.includes('✅')) {
+                  updateSerialStatus(true, entry.data?.port);
+                } else if (entry.message.includes('No serial') || entry.message.includes('❌')) {
+                  updateSerialStatus(false, null);
+                }
+              }
+            }
+          } catch (err) {
+            // Fallback for plain text messages
+            console.log('[MonteBot] Resposta:', e.data);
+          }
         };
       } catch (e) {
         console.warn('[MonteBot] Falha ao conectar WebSocket:', e);
-        updateSerialStatus(false);
+        updateWsStatus(false);
         wsReconnectTimer = setTimeout(connectWebSocket, 3000);
       }
     }
 
     function sendCommand(cmd) {
-      console.log('[MonteBot] ' + cmd);
+      console.log('[MonteBot] Enviando comando:', cmd);
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(cmd);
+        // Send as JSON for better handling
+        ws.send(JSON.stringify({ type: 'command', cmd: cmd }));
+      } else {
+        console.warn('[MonteBot] WebSocket não conectado, comando não enviado:', cmd);
       }
     }
 
@@ -1754,10 +1814,699 @@ POSITIONEOF
   chmod 644 /var/www/html/position.html
 }
 
+create_logs_page() {
+  cat <<'LOGSEOF' >/var/www/html/logs.html
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Monte Bot - Logs em Tempo Real</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' ry='12' fill='%23002233'/%3E%3Cpath d='M16 42l8-20h4l8 20h-4l-1.8-5.2h-9.2L20 42zm7.4-8.4h6.4L27 24.4zM40 22h4v20h-4z' fill='%2300c6ff'/%3E%3C/svg%3E" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+      background: #0a0a0a;
+      color: #e2f3ff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      background: rgba(0, 14, 30, 0.9);
+      border-bottom: 1px solid rgba(0, 140, 255, 0.3);
+      padding: 15px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 15px;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .back-link {
+      color: #7fe1ff;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .back-link:hover { text-decoration: underline; }
+    h1 {
+      font-size: 1.3rem;
+      letter-spacing: 0.05rem;
+      color: #7fe1ff;
+    }
+    .status-indicators {
+      display: flex;
+      gap: 15px;
+      flex-wrap: wrap;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+    .status-badge.connected {
+      background: rgba(0, 100, 0, 0.4);
+      border: 1px solid rgba(0, 255, 0, 0.4);
+      color: #88ff88;
+    }
+    .status-badge.disconnected {
+      background: rgba(100, 0, 0, 0.4);
+      border: 1px solid rgba(255, 0, 0, 0.4);
+      color: #ff8888;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    .status-badge.connected .status-dot { background: #00ff00; }
+    .status-badge.disconnected .status-dot { background: #ff4444; animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .toolbar {
+      background: rgba(0, 14, 30, 0.6);
+      border-bottom: 1px solid rgba(0, 140, 255, 0.2);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      flex-wrap: wrap;
+    }
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .toolbar label {
+      font-size: 0.8rem;
+      color: rgba(226, 243, 255, 0.7);
+    }
+    .toolbar select, .toolbar input {
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(0, 140, 255, 0.3);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: #e2f3ff;
+      font-size: 0.85rem;
+    }
+    .toolbar button {
+      background: linear-gradient(135deg, #00c6ff, #0072ff);
+      color: #032131;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.2s ease;
+    }
+    .toolbar button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0, 153, 255, 0.3);
+    }
+    .toolbar button.danger {
+      background: linear-gradient(135deg, #ff6b6b, #c92a2a);
+    }
+    .toolbar button.secondary {
+      background: rgba(0, 140, 255, 0.2);
+      border: 1px solid rgba(0, 140, 255, 0.4);
+      color: #7fe1ff;
+    }
+    .stats-bar {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 8px 20px;
+      display: flex;
+      gap: 20px;
+      font-size: 0.75rem;
+      color: rgba(226, 243, 255, 0.6);
+      border-bottom: 1px solid rgba(0, 140, 255, 0.1);
+    }
+    .stat {
+      display: flex;
+      gap: 6px;
+    }
+    .stat-value {
+      color: #7fe1ff;
+      font-weight: 600;
+    }
+    .log-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 20px;
+    }
+    .log-entry {
+      padding: 6px 12px;
+      margin-bottom: 2px;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .log-entry:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .log-time {
+      color: rgba(226, 243, 255, 0.4);
+      font-size: 0.75rem;
+      min-width: 85px;
+      flex-shrink: 0;
+    }
+    .log-source {
+      font-weight: 600;
+      min-width: 80px;
+      flex-shrink: 0;
+    }
+    .log-source.WEBSOCKET { color: #9b59b6; }
+    .log-source.SERIAL { color: #e74c3c; }
+    .log-source.COMMAND { color: #3498db; }
+    .log-source.SYSTEM { color: #2ecc71; }
+    .log-source.ARDUINO { color: #f39c12; }
+    .log-level {
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 3px;
+      min-width: 50px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .log-level.INFO { background: rgba(52, 152, 219, 0.3); color: #3498db; }
+    .log-level.DEBUG { background: rgba(149, 165, 166, 0.3); color: #95a5a6; }
+    .log-level.WARNING { background: rgba(241, 196, 15, 0.3); color: #f1c40f; }
+    .log-level.ERROR { background: rgba(231, 76, 60, 0.3); color: #e74c3c; }
+    .log-message {
+      flex: 1;
+      word-break: break-word;
+    }
+    .log-data {
+      font-size: 0.75rem;
+      color: rgba(226, 243, 255, 0.5);
+      margin-left: 180px;
+      padding: 4px 8px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 4px;
+      margin-top: 4px;
+    }
+    .command-input-area {
+      background: rgba(0, 14, 30, 0.9);
+      border-top: 1px solid rgba(0, 140, 255, 0.3);
+      padding: 15px 20px;
+    }
+    .command-input-wrapper {
+      display: flex;
+      gap: 10px;
+      max-width: 800px;
+    }
+    .command-input {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(0, 140, 255, 0.4);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: #e2f3ff;
+      font-family: inherit;
+      font-size: 1rem;
+    }
+    .command-input:focus {
+      outline: none;
+      border-color: #00c6ff;
+      box-shadow: 0 0 0 2px rgba(0, 198, 255, 0.2);
+    }
+    .quick-commands {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    .quick-cmd {
+      background: rgba(0, 140, 255, 0.15);
+      border: 1px solid rgba(0, 140, 255, 0.3);
+      color: #7fe1ff;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    .quick-cmd:hover {
+      background: rgba(0, 140, 255, 0.3);
+      transform: translateY(-1px);
+    }
+    .quick-cmd.forward { border-color: #2ecc71; color: #2ecc71; }
+    .quick-cmd.back { border-color: #e74c3c; color: #e74c3c; }
+    .quick-cmd.left { border-color: #f39c12; color: #f39c12; }
+    .quick-cmd.right { border-color: #f39c12; color: #f39c12; }
+    .quick-cmd.stop { border-color: #95a5a6; color: #95a5a6; }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: rgba(226, 243, 255, 0.4);
+    }
+    .empty-state h2 {
+      font-size: 1.2rem;
+      margin-bottom: 10px;
+      color: rgba(226, 243, 255, 0.6);
+    }
+    #auto-scroll-indicator {
+      position: fixed;
+      bottom: 120px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid rgba(0, 140, 255, 0.4);
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      color: #7fe1ff;
+      cursor: pointer;
+      display: none;
+    }
+    @media (max-width: 768px) {
+      .header { padding: 10px 15px; }
+      h1 { font-size: 1.1rem; }
+      .log-entry { flex-wrap: wrap; font-size: 0.8rem; gap: 6px; }
+      .log-time { min-width: auto; }
+      .log-source { min-width: 60px; }
+      .log-data { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <a href="/" class="back-link">← Menu</a>
+      <h1>📋 Logs em Tempo Real</h1>
+    </div>
+    <div class="status-indicators">
+      <div id="ws-status" class="status-badge disconnected">
+        <span class="status-dot"></span>
+        <span id="ws-status-text">WebSocket: Desconectado</span>
+      </div>
+      <div id="serial-status" class="status-badge disconnected">
+        <span class="status-dot"></span>
+        <span id="serial-status-text">Serial: Desconectado</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="toolbar-group">
+      <label>Filtrar por fonte:</label>
+      <select id="filter-source">
+        <option value="">Todas</option>
+        <option value="WEBSOCKET">WebSocket</option>
+        <option value="SERIAL">Serial</option>
+        <option value="COMMAND">Comandos</option>
+        <option value="ARDUINO">Arduino</option>
+        <option value="SYSTEM">Sistema</option>
+      </select>
+    </div>
+    <div class="toolbar-group">
+      <label>Nível mínimo:</label>
+      <select id="filter-level">
+        <option value="DEBUG">DEBUG</option>
+        <option value="INFO" selected>INFO</option>
+        <option value="WARNING">WARNING</option>
+        <option value="ERROR">ERROR</option>
+      </select>
+    </div>
+    <div class="toolbar-group">
+      <input type="text" id="filter-text" placeholder="Buscar nos logs...">
+    </div>
+    <button id="clear-logs" class="danger">Limpar Logs</button>
+    <button id="reconnect-ws" class="secondary">Reconectar WS</button>
+    <button id="reconnect-serial" class="secondary">Reconectar Serial</button>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat">Logs: <span id="stat-logs" class="stat-value">0</span></div>
+    <div class="stat">Comandos enviados: <span id="stat-sent" class="stat-value">0</span></div>
+    <div class="stat">Comandos falhos: <span id="stat-failed" class="stat-value">0</span></div>
+    <div class="stat">Último comando: <span id="stat-last-cmd" class="stat-value">-</span></div>
+    <div class="stat">Porta Serial: <span id="stat-port" class="stat-value">-</span></div>
+  </div>
+
+  <div class="log-container" id="log-container">
+    <div class="empty-state" id="empty-state">
+      <h2>Aguardando logs...</h2>
+      <p>Os logs aparecerão aqui quando o sistema estiver ativo.</p>
+    </div>
+  </div>
+
+  <div id="auto-scroll-indicator" onclick="enableAutoScroll()">
+    ↓ Novos logs disponíveis - Clique para rolar
+  </div>
+
+  <div class="command-input-area">
+    <div class="command-input-wrapper">
+      <input type="text" id="command-input" class="command-input" placeholder="Digite um comando para enviar ao Arduino (ex: F, T, E, D, P)..." />
+      <button id="send-command">Enviar</button>
+    </div>
+    <div class="quick-commands">
+      <button class="quick-cmd forward" data-cmd="F">F - Frente</button>
+      <button class="quick-cmd back" data-cmd="T">T - Trás</button>
+      <button class="quick-cmd left" data-cmd="E">E - Esquerda</button>
+      <button class="quick-cmd right" data-cmd="D">D - Direita</button>
+      <button class="quick-cmd stop" data-cmd="P">P - Parar</button>
+      <button class="quick-cmd" data-cmd="E1">E1 - Slide Esq</button>
+      <button class="quick-cmd" data-cmd="D1">D1 - Slide Dir</button>
+      <button class="quick-cmd" data-cmd="P1">P1 - Slide Centro</button>
+    </div>
+  </div>
+
+  <script>
+    // Configuration
+    const WS_URL = 'ws://' + window.location.hostname + ':8765';
+    const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3 };
+
+    // State
+    let ws = null;
+    let logs = [];
+    let autoScroll = true;
+    let reconnectTimer = null;
+    let stats = { sent: 0, failed: 0, lastCommand: null };
+
+    // DOM elements
+    const logContainer = document.getElementById('log-container');
+    const emptyState = document.getElementById('empty-state');
+    const wsStatus = document.getElementById('ws-status');
+    const wsStatusText = document.getElementById('ws-status-text');
+    const serialStatus = document.getElementById('serial-status');
+    const serialStatusText = document.getElementById('serial-status-text');
+    const filterSource = document.getElementById('filter-source');
+    const filterLevel = document.getElementById('filter-level');
+    const filterText = document.getElementById('filter-text');
+    const commandInput = document.getElementById('command-input');
+    const autoScrollIndicator = document.getElementById('auto-scroll-indicator');
+
+    // Stats elements
+    const statLogs = document.getElementById('stat-logs');
+    const statSent = document.getElementById('stat-sent');
+    const statFailed = document.getElementById('stat-failed');
+    const statLastCmd = document.getElementById('stat-last-cmd');
+    const statPort = document.getElementById('stat-port');
+
+    function formatTime(timestamp) {
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString('pt-BR', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        second: '2-digit',
+        fractionalSecondDigits: 3
+      });
+    }
+
+    function createLogElement(entry) {
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      div.dataset.source = entry.source;
+      div.dataset.level = entry.level;
+      
+      const time = document.createElement('span');
+      time.className = 'log-time';
+      time.textContent = formatTime(entry.timestamp);
+      
+      const level = document.createElement('span');
+      level.className = 'log-level ' + entry.level;
+      level.textContent = entry.level;
+      
+      const source = document.createElement('span');
+      source.className = 'log-source ' + entry.source;
+      source.textContent = entry.source;
+      
+      const message = document.createElement('span');
+      message.className = 'log-message';
+      message.textContent = entry.message;
+      
+      div.appendChild(time);
+      div.appendChild(level);
+      div.appendChild(source);
+      div.appendChild(message);
+      
+      if (entry.data && Object.keys(entry.data).length > 0) {
+        const data = document.createElement('div');
+        data.className = 'log-data';
+        data.textContent = JSON.stringify(entry.data);
+        div.appendChild(data);
+      }
+      
+      return div;
+    }
+
+    function addLogEntry(entry) {
+      logs.push(entry);
+      statLogs.textContent = logs.length;
+      
+      if (shouldShowLog(entry)) {
+        emptyState.style.display = 'none';
+        const logEl = createLogElement(entry);
+        logContainer.appendChild(logEl);
+        
+        if (autoScroll) {
+          logContainer.scrollTop = logContainer.scrollHeight;
+        } else {
+          autoScrollIndicator.style.display = 'block';
+        }
+      }
+    }
+
+    function shouldShowLog(entry) {
+      const sourceFilter = filterSource.value;
+      const levelFilter = filterLevel.value;
+      const textFilter = filterText.value.toLowerCase();
+      
+      if (sourceFilter && entry.source !== sourceFilter) return false;
+      if (LOG_LEVELS[entry.level] < LOG_LEVELS[levelFilter]) return false;
+      if (textFilter && !entry.message.toLowerCase().includes(textFilter)) return false;
+      
+      return true;
+    }
+
+    function refreshLogs() {
+      // Clear container except empty state
+      logContainer.innerHTML = '';
+      logContainer.appendChild(emptyState);
+      
+      let visibleCount = 0;
+      logs.forEach(entry => {
+        if (shouldShowLog(entry)) {
+          if (visibleCount === 0) emptyState.style.display = 'none';
+          logContainer.appendChild(createLogElement(entry));
+          visibleCount++;
+        }
+      });
+      
+      if (visibleCount === 0) {
+        emptyState.style.display = 'block';
+      }
+      
+      if (autoScroll) {
+        logContainer.scrollTop = logContainer.scrollHeight;
+      }
+    }
+
+    function updateSerialStatus(serialInfo) {
+      if (serialInfo.connected) {
+        serialStatus.className = 'status-badge connected';
+        serialStatusText.textContent = 'Serial: ' + (serialInfo.port || 'Conectado');
+        statPort.textContent = serialInfo.port || '-';
+      } else {
+        serialStatus.className = 'status-badge disconnected';
+        serialStatusText.textContent = 'Serial: Desconectado';
+        statPort.textContent = serialInfo.last_error ? 'Erro' : '-';
+      }
+    }
+
+    function updateStats(statsInfo) {
+      statSent.textContent = statsInfo.sent || 0;
+      statFailed.textContent = statsInfo.failed || 0;
+      statLastCmd.textContent = statsInfo.last_command || '-';
+    }
+
+    function connectWebSocket() {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      
+      ws = new WebSocket(WS_URL);
+      
+      ws.onopen = () => {
+        wsStatus.className = 'status-badge connected';
+        wsStatusText.textContent = 'WebSocket: Conectado';
+        addLogEntry({
+          timestamp: new Date().toISOString(),
+          level: 'INFO',
+          source: 'SYSTEM',
+          message: '🔌 Conectado ao servidor WebSocket',
+          data: { url: WS_URL }
+        });
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      };
+      
+      ws.onclose = () => {
+        wsStatus.className = 'status-badge disconnected';
+        wsStatusText.textContent = 'WebSocket: Desconectado';
+        addLogEntry({
+          timestamp: new Date().toISOString(),
+          level: 'WARNING',
+          source: 'SYSTEM',
+          message: '🔌 Desconectado do servidor WebSocket, tentando reconectar...',
+          data: {}
+        });
+        reconnectTimer = setTimeout(connectWebSocket, 3000);
+      };
+      
+      ws.onerror = (e) => {
+        addLogEntry({
+          timestamp: new Date().toISOString(),
+          level: 'ERROR',
+          source: 'SYSTEM',
+          message: '❌ Erro de conexão WebSocket',
+          data: { error: e.message || 'Unknown error' }
+        });
+      };
+      
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          
+          if (data.type === 'log') {
+            addLogEntry(data.entry);
+          } else if (data.type === 'history') {
+            data.entries.forEach(entry => addLogEntry(entry));
+          } else if (data.type === 'status') {
+            updateSerialStatus(data.serial);
+            updateStats(data.stats);
+          } else if (data.type === 'command_result') {
+            // Command result handled via logs
+          }
+        } catch (err) {
+          console.error('Failed to parse message:', err);
+        }
+      };
+    }
+
+    function sendCommand(cmd) {
+      if (!cmd) return;
+      
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'command', cmd: cmd }));
+      } else {
+        addLogEntry({
+          timestamp: new Date().toISOString(),
+          level: 'ERROR',
+          source: 'SYSTEM',
+          message: '❌ Não foi possível enviar comando - WebSocket desconectado',
+          data: { command: cmd }
+        });
+      }
+    }
+
+    function enableAutoScroll() {
+      autoScroll = true;
+      autoScrollIndicator.style.display = 'none';
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    // Event listeners
+    filterSource.addEventListener('change', refreshLogs);
+    filterLevel.addEventListener('change', refreshLogs);
+    filterText.addEventListener('input', refreshLogs);
+    
+    document.getElementById('clear-logs').addEventListener('click', () => {
+      logs = [];
+      logContainer.innerHTML = '';
+      logContainer.appendChild(emptyState);
+      emptyState.style.display = 'block';
+      statLogs.textContent = '0';
+    });
+    
+    document.getElementById('reconnect-ws').addEventListener('click', () => {
+      if (ws) {
+        ws.close();
+      }
+      setTimeout(connectWebSocket, 500);
+    });
+    
+    document.getElementById('reconnect-serial').addEventListener('click', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'reconnect_serial' }));
+      }
+    });
+    
+    document.getElementById('send-command').addEventListener('click', () => {
+      const cmd = commandInput.value.trim();
+      if (cmd) {
+        sendCommand(cmd);
+        commandInput.value = '';
+      }
+    });
+    
+    commandInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        const cmd = commandInput.value.trim();
+        if (cmd) {
+          sendCommand(cmd);
+          commandInput.value = '';
+        }
+      }
+    });
+    
+    document.querySelectorAll('.quick-cmd').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sendCommand(btn.dataset.cmd);
+      });
+    });
+    
+    logContainer.addEventListener('scroll', () => {
+      const atBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 50;
+      if (atBottom) {
+        autoScroll = true;
+        autoScrollIndicator.style.display = 'none';
+      } else {
+        autoScroll = false;
+      }
+    });
+
+    // Initialize
+    connectWebSocket();
+    
+    // Add initial log
+    addLogEntry({
+      timestamp: new Date().toISOString(),
+      level: 'INFO',
+      source: 'SYSTEM',
+      message: '🚀 Página de logs iniciada',
+      data: { ws_url: WS_URL }
+    });
+  </script>
+</body>
+</html>
+LOGSEOF
+  chown www-data:www-data /var/www/html/logs.html
+  chmod 644 /var/www/html/logs.html
+}
+
 # Executar criação das páginas
 create_index_page
 create_config_page
 create_live_page
 create_position_page
+create_logs_page
 
 echo "[INFO] Páginas web criadas com sucesso."
