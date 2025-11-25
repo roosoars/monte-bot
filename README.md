@@ -251,9 +251,50 @@ O script `setup_hotspot.sh` agora inclui um serviço de inicialização sequenci
 - Adiciona delays entre cada inicialização para garantir estabilidade
 - Previne falhas de inicialização causadas por condições de corrida
 
+## Código Arduino para Controle de Motores
+
+O sistema Monte Bot requer um Arduino conectado via USB ao Raspberry Pi para controlar os motores do robô. O código completo está disponível na pasta `arduino/`.
+
+### Instalação Rápida do Arduino
+
+1. Abra o Arduino IDE
+2. Abra o arquivo `arduino/montebot_motor_controller/montebot_motor_controller.ino`
+3. Selecione sua placa e porta
+4. Faça upload do código
+5. Conecte o Arduino ao Raspberry Pi via USB
+
+### Protocolo de Comandos
+
+| Comando | Descrição |
+|---------|-----------|
+| `F` | Frente (Forward) |
+| `T` | Trás (Back) |
+| `E` | Esquerda (Left) |
+| `D` | Direita (Right) |
+| `P` | Parado (Stop) |
+| `E1` | Ajuste fino para esquerda (slide) |
+| `D1` | Ajuste fino para direita (slide) |
+| `P1` | Sem ajuste (slide centro) |
+
+### Conexões do Hardware
+
+Consulte `arduino/README.md` para diagrama completo de conexões.
+
+**Resumo das conexões (Arduino → L298N):**
+- Pino 7 → IN1 (Motor Esquerdo)
+- Pino 6 → IN2 (Motor Esquerdo)
+- Pino 5 → ENA (PWM Motor Esquerdo)
+- Pino 4 → IN3 (Motor Direito)
+- Pino 3 → IN4 (Motor Direito)
+- Pino 9 → ENB (PWM Motor Direito)
+- GND → GND comum
+
 ## Estrutura do repositório
 
 ```
+arduino/                    # Código Arduino para controle de motores
+  montebot_motor_controller/  # Sketch principal do Arduino
+  README.md                   # Documentação detalhada do Arduino
 assets/                     # Bibliotecas, modelos e WASM empacotados para uso offline
 setup_hotspot.sh            # Script de provisionamento do hotspot / nginx
 setup_camera_stream.sh      # Script de streaming HLS e interface web
