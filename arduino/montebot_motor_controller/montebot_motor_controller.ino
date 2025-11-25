@@ -76,7 +76,10 @@
 #define RIGHT_IN2   5   // Direção 2 do motor direito
 
 // Servo Motor
-#define SERVO_PIN   9   // Pino do servo motor
+#define SERVO_PIN        9    // Pino do servo motor
+#define SERVO_LEFT_POS   60   // Posição esquerda do servo (0-180 graus)
+#define SERVO_CENTER_POS 90   // Posição central do servo
+#define SERVO_RIGHT_POS  120  // Posição direita do servo
 
 // LED de status
 #define STATUS_LED  LED_BUILTIN  // Pino 13 na maioria dos Arduinos
@@ -95,7 +98,7 @@
 Servo servoMotor;
 
 // Posição atual do servo (0-180 graus)
-int servoPosition = 90;  // Posição central inicial
+int servoPosition = SERVO_CENTER_POS;  // Posição central inicial
 
 // Comando atual e anterior
 char currentCommand = 'P';      // Comando em execução
@@ -230,7 +233,7 @@ void turnRight() {
  */
 void adjustLeft() {
   // Move o servo para a esquerda
-  servoPosition = 60;  // Posição esquerda
+  servoPosition = SERVO_LEFT_POS;
   servoMotor.write(servoPosition);
 }
 
@@ -240,7 +243,7 @@ void adjustLeft() {
  */
 void adjustRight() {
   // Move o servo para a direita
-  servoPosition = 120;  // Posição direita
+  servoPosition = SERVO_RIGHT_POS;
   servoMotor.write(servoPosition);
 }
 
@@ -249,7 +252,7 @@ void adjustRight() {
  */
 void noAdjustment() {
   // Centraliza o servo
-  servoPosition = 90;  // Posição central
+  servoPosition = SERVO_CENTER_POS;
   servoMotor.write(servoPosition);
 }
 
@@ -442,16 +445,16 @@ void motorTest() {
   
   // Teste servo motor
   Serial.println("TEST:SERVO_LEFT");
-  servoMotor.write(60);
+  servoMotor.write(SERVO_LEFT_POS);
   delay(500);
   Serial.println("TEST:SERVO_CENTER");
-  servoMotor.write(90);
+  servoMotor.write(SERVO_CENTER_POS);
   delay(500);
   Serial.println("TEST:SERVO_RIGHT");
-  servoMotor.write(120);
+  servoMotor.write(SERVO_RIGHT_POS);
   delay(500);
   Serial.println("TEST:SERVO_CENTER");
-  servoMotor.write(90);
+  servoMotor.write(SERVO_CENTER_POS);
   delay(200);
   
   Serial.println("MOTOR_TEST:COMPLETE");
