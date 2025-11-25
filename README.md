@@ -281,13 +281,18 @@ O sistema Monte Bot requer um Arduino conectado via USB ao Raspberry Pi para con
 Consulte `arduino/README.md` para diagrama completo de conexões.
 
 **Resumo das conexões (Arduino → L298N):**
-- Pino 7 → IN1 (Motor Esquerdo)
-- Pino 6 → IN2 (Motor Esquerdo)
-- Pino 5 → ENA (PWM Motor Esquerdo)
+- Pino 2 → IN1 (Motor Esquerdo)
+- Pino 3 → IN2 (Motor Esquerdo)
 - Pino 4 → IN3 (Motor Direito)
-- Pino 3 → IN4 (Motor Direito)
-- Pino 9 → ENB (PWM Motor Direito)
+- Pino 5 → IN4 (Motor Direito)
+- ENA → Jumper para +5V (velocidade fixa)
+- ENB → Jumper para +5V (velocidade fixa)
 - GND → GND comum
+
+**Servo Motor:**
+- Pino 9 → Sinal do Servo
+- 5V → VCC do Servo
+- GND → GND do Servo
 
 ## Estrutura do repositório
 
