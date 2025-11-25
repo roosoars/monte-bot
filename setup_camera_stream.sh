@@ -314,6 +314,9 @@ WEBSOCKET_PORT = 8765
 SERIAL_PORT = os.environ.get('SERIAL_PORT', '')  # Empty means auto-detect
 SERIAL_BAUDRATE = int(os.environ.get('SERIAL_BAUDRATE', '115200'))
 LOG_HISTORY_SIZE = 500  # Keep last 500 log entries
+SERIAL_RESPONSE_TIMEOUT = 0.05  # Seconds to wait for Arduino response
+SERIAL_READ_INTERVAL = 0.1  # Seconds between serial read checks
+SERIAL_INIT_DELAY = 2.0  # Seconds to wait after opening serial for Arduino reset
 
 # Global state
 ser: Optional[serial.Serial] = None
@@ -435,7 +438,7 @@ async def init_serial() -> Optional[serial.Serial]:
             ser = serial.Serial(port, SERIAL_BAUDRATE, timeout=1)
             
             # Wait a bit for Arduino to reset
-            await asyncio.sleep(2)
+            await asyncio.sleep(SERIAL_INIT_DELAY)
             
             # Flush any garbage
             ser.reset_input_buffer()
@@ -481,7 +484,7 @@ async def send_command(cmd: str, websocket=None) -> bool:
                                    {"command": cmd, "bytes": bytes_written})
             
             # Try to read response (non-blocking)
-            await asyncio.sleep(0.05)  # Small delay for response
+            await asyncio.sleep(SERIAL_RESPONSE_TIMEOUT)
             if ser.in_waiting > 0:
                 response = ser.read(ser.in_waiting).decode('utf-8', errors='replace').strip()
                 if response:
@@ -519,7 +522,7 @@ async def read_serial_data():
         except Exception as e:
             await log_and_broadcast("ERROR", "SERIAL", f"Unexpected error reading serial: {e}")
         
-        await asyncio.sleep(0.1)  # Check every 100ms
+        await asyncio.sleep(SERIAL_READ_INTERVAL)
 
 async def handle_connection(websocket):
     """Handle incoming WebSocket connections."""
