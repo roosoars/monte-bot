@@ -152,6 +152,40 @@ Se o hotspot WiFi não estiver iniciando automaticamente quando o Raspberry Pi �
    systemctl status hostapd dnsmasq nginx dhcpcd hotspot-startup.service
    ```
 
+### Erro "Release file not valid yet" durante apt-get update
+
+Se você receber erros como:
+```
+E: Release file for deb.debian.org/debian-security/dists/bookworm-security/InRelease is not valid yet (invalid for another 3h 54min 21s)
+```
+
+Isso significa que o **relógio do sistema está atrasado**. O Raspberry Pi não possui um RTC (Real-Time Clock) de hardware e depende do NTP para sincronizar o horário. Se a internet não estiver disponível no boot, o relógio pode ficar dessincronizado.
+
+**Solução automática:** Os scripts `setup_hotspot.sh` e `setup_camera_stream.sh` agora incluem verificação e sincronização automática do relógio antes de executar `apt-get update`.
+
+**Solução manual:**
+1. **Verificar status do horário:**
+   ```bash
+   timedatectl status
+   ```
+
+2. **Forçar sincronização NTP:**
+   ```bash
+   sudo timedatectl set-ntp true
+   sudo systemctl restart systemd-timesyncd
+   ```
+
+3. **Aguardar sincronização (ou usar ntpdate como alternativa):**
+   ```bash
+   sudo apt-get install ntpdate
+   sudo ntpdate -u pool.ntp.org
+   ```
+
+4. **Definir horário manualmente (último recurso):**
+   ```bash
+   sudo date -s "2024-01-15 14:30:00"
+   ```
+
 ### Outros problemas comuns
 
 - **Hotspot não aparece**: verifique se `rfkill list` está liberado. O script já mascara serviços relacionados; execute `sudo rfkill unblock all` como medida adicional.  

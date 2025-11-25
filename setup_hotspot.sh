@@ -21,6 +21,75 @@ require_root() {
   fi
 }
 
+sync_system_clock() {
+  # Raspberry Pi does not have a hardware RTC, so the clock may be incorrect
+  # after boot if NTP hasn't synced yet. This causes apt-get update to fail with
+  # "Release file not valid yet" errors.
+  echo "[INFO] Checking system clock synchronization..."
+
+  # Check if system time is obviously wrong (before year 2020)
+  # Using 2020 as a safe minimum since any reasonable Raspberry Pi OS installation
+  # would be from 2020 or later.
+  local current_year
+  current_year=$(date +%Y)
+  if [[ ${current_year} -lt 2020 ]]; then
+    echo "[WARNING] System clock appears to be incorrect (year: ${current_year}). Attempting to sync..."
+  fi
+
+  # Enable NTP sync via timedatectl (works with systemd-timesyncd)
+  if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp true 2>/dev/null || true
+  fi
+
+  # Try to force immediate sync with systemd-timesyncd
+  if systemctl is-active systemd-timesyncd >/dev/null 2>&1; then
+    systemctl restart systemd-timesyncd 2>/dev/null || true
+  fi
+
+  # Wait for time sync (up to 30 seconds)
+  local max_wait=30
+  local waited=0
+  while [[ ${waited} -lt ${max_wait} ]]; do
+    # Check if time is synced via timedatectl
+    if command -v timedatectl >/dev/null 2>&1; then
+      local sync_status
+      sync_status=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "no")
+      if [[ "${sync_status}" == "yes" ]]; then
+        echo "[INFO] System clock synchronized successfully."
+        return 0
+      fi
+    fi
+
+    # Alternative: check if year is now reasonable (2020 or later)
+    current_year=$(date +%Y)
+    if [[ ${current_year} -ge 2020 ]]; then
+      echo "[INFO] System clock appears to be correct (year: ${current_year})."
+      return 0
+    fi
+
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $((waited % 5)) -eq 0 ]]; then
+      echo "[INFO] Waiting for clock sync... (${waited}/${max_wait}s)"
+    fi
+  done
+
+  # If still not synced, try using ntpdate as fallback
+  if command -v ntpdate >/dev/null 2>&1; then
+    echo "[INFO] Attempting to sync clock using ntpdate..."
+    ntpdate -u pool.ntp.org 2>/dev/null || ntpdate -u time.google.com 2>/dev/null || true
+  fi
+
+  # Final check
+  current_year=$(date +%Y)
+  if [[ ${current_year} -lt 2020 ]]; then
+    echo "[WARNING] Could not synchronize system clock. apt-get update may fail."
+    echo "[WARNING] Please ensure the Raspberry Pi has internet access and try again."
+  else
+    echo "[INFO] System clock check completed (year: ${current_year})."
+  fi
+}
+
 check_operating_system() {
   local os_id
   os_id=$(awk -F= '/^ID=/{gsub(/"/, ""); print $2}' /etc/os-release)
@@ -55,6 +124,7 @@ disable_wpa_supplicant() {
 
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
+  sync_system_clock
   apt-get update
   apt-get install -y --no-install-recommends hostapd dnsmasq nginx dhcpcd5
   systemctl stop hostapd || true

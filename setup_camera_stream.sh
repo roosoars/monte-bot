@@ -49,6 +49,75 @@ require_root() {
   fi
 }
 
+sync_system_clock() {
+  # Raspberry Pi não possui um RTC de hardware, então o relógio pode estar incorreto
+  # após a inicialização se o NTP ainda não sincronizou. Isso causa falha no apt-get update
+  # com erros "Release file not valid yet".
+  echo "[INFO] Verificando sincronização do relógio do sistema..."
+
+  # Verificar se o horário do sistema está obviamente errado (antes de 2020)
+  # Usando 2020 como ano mínimo seguro, pois qualquer instalação razoável do
+  # Raspberry Pi OS seria de 2020 ou posterior.
+  local current_year
+  current_year=$(date +%Y)
+  if [[ ${current_year} -lt 2020 ]]; then
+    echo "[AVISO] O relógio do sistema parece estar incorreto (ano: ${current_year}). Tentando sincronizar..."
+  fi
+
+  # Habilitar sincronização NTP via timedatectl (funciona com systemd-timesyncd)
+  if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp true 2>/dev/null || true
+  fi
+
+  # Tentar forçar sincronização imediata com systemd-timesyncd
+  if systemctl is-active systemd-timesyncd >/dev/null 2>&1; then
+    systemctl restart systemd-timesyncd 2>/dev/null || true
+  fi
+
+  # Aguardar sincronização do horário (até 30 segundos)
+  local max_wait=30
+  local waited=0
+  while [[ ${waited} -lt ${max_wait} ]]; do
+    # Verificar se o horário está sincronizado via timedatectl
+    if command -v timedatectl >/dev/null 2>&1; then
+      local sync_status
+      sync_status=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "no")
+      if [[ "${sync_status}" == "yes" ]]; then
+        echo "[INFO] Relógio do sistema sincronizado com sucesso."
+        return 0
+      fi
+    fi
+
+    # Alternativa: verificar se o ano agora está razoável (2020 ou posterior)
+    current_year=$(date +%Y)
+    if [[ ${current_year} -ge 2020 ]]; then
+      echo "[INFO] O relógio do sistema parece estar correto (ano: ${current_year})."
+      return 0
+    fi
+
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $((waited % 5)) -eq 0 ]]; then
+      echo "[INFO] Aguardando sincronização do relógio... (${waited}/${max_wait}s)"
+    fi
+  done
+
+  # Se ainda não sincronizou, tentar usar ntpdate como fallback
+  if command -v ntpdate >/dev/null 2>&1; then
+    echo "[INFO] Tentando sincronizar relógio usando ntpdate..."
+    ntpdate -u pool.ntp.org 2>/dev/null || ntpdate -u time.google.com 2>/dev/null || true
+  fi
+
+  # Verificação final
+  current_year=$(date +%Y)
+  if [[ ${current_year} -lt 2020 ]]; then
+    echo "[AVISO] Não foi possível sincronizar o relógio do sistema. apt-get update pode falhar."
+    echo "[AVISO] Certifique-se de que o Raspberry Pi tem acesso à internet e tente novamente."
+  else
+    echo "[INFO] Verificação do relógio do sistema concluída (ano: ${current_year})."
+  fi
+}
+
 check_operating_system() {
   local os_id
   os_id=$(awk -F= '/^ID=/{gsub(/"/, ""); print $2}' /etc/os-release)
@@ -64,6 +133,7 @@ check_operating_system() {
 
 install_camera_packages() {
   export DEBIAN_FRONTEND=noninteractive
+  sync_system_clock
   apt-get update
   apt-get install -y --no-install-recommends rpicam-apps ffmpeg curl python3 python3-serial python3-websockets
 }
