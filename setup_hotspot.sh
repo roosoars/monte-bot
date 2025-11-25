@@ -21,6 +21,75 @@ require_root() {
   fi
 }
 
+sync_system_clock() {
+  # Raspberry Pi does not have a hardware RTC, so the clock may be incorrect
+  # after boot if NTP hasn't synced yet. This causes apt-get update to fail with
+  # "Release file not valid yet" errors.
+  echo "[INFO] Checking system clock synchronization..."
+
+  # Check if system time is obviously wrong (before year 2020)
+  # Using 2020 as a safe minimum since any reasonable Raspberry Pi OS installation
+  # would be from 2020 or later.
+  local current_year
+  current_year=$(date +%Y)
+  if [[ ${current_year} -lt 2020 ]]; then
+    echo "[WARNING] System clock appears to be incorrect (year: ${current_year}). Attempting to sync..."
+  fi
+
+  # Enable NTP sync via timedatectl (works with systemd-timesyncd)
+  if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp true 2>/dev/null || true
+  fi
+
+  # Try to force immediate sync with systemd-timesyncd
+  if systemctl is-active systemd-timesyncd >/dev/null 2>&1; then
+    systemctl restart systemd-timesyncd 2>/dev/null || true
+  fi
+
+  # Wait for time sync (up to 30 seconds)
+  local max_wait=30
+  local waited=0
+  while [[ ${waited} -lt ${max_wait} ]]; do
+    # Check if time is synced via timedatectl
+    if command -v timedatectl >/dev/null 2>&1; then
+      local sync_status
+      sync_status=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "no")
+      if [[ "${sync_status}" == "yes" ]]; then
+        echo "[INFO] System clock synchronized successfully."
+        return 0
+      fi
+    fi
+
+    # Alternative: check if year is now reasonable (2020 or later)
+    current_year=$(date +%Y)
+    if [[ ${current_year} -ge 2020 ]]; then
+      echo "[INFO] System clock appears to be correct (year: ${current_year})."
+      return 0
+    fi
+
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $((waited % 5)) -eq 0 ]]; then
+      echo "[INFO] Waiting for clock sync... (${waited}/${max_wait}s)"
+    fi
+  done
+
+  # If still not synced, try using ntpdate as fallback
+  if command -v ntpdate >/dev/null 2>&1; then
+    echo "[INFO] Attempting to sync clock using ntpdate..."
+    ntpdate -u pool.ntp.org 2>/dev/null || ntpdate -u time.google.com 2>/dev/null || true
+  fi
+
+  # Final check
+  current_year=$(date +%Y)
+  if [[ ${current_year} -lt 2020 ]]; then
+    echo "[WARNING] Could not synchronize system clock. apt-get update may fail."
+    echo "[WARNING] Please ensure the Raspberry Pi has internet access and try again."
+  else
+    echo "[INFO] System clock check completed (year: ${current_year})."
+  fi
+}
+
 check_operating_system() {
   local os_id
   os_id=$(awk -F= '/^ID=/{gsub(/"/, ""); print $2}' /etc/os-release)
@@ -55,6 +124,7 @@ disable_wpa_supplicant() {
 
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
+  sync_system_clock
   apt-get update
   apt-get install -y --no-install-recommends hostapd dnsmasq nginx dhcpcd5
   systemctl stop hostapd || true
@@ -127,6 +197,194 @@ EOF
   systemctl daemon-reload
   systemctl enable hotspot-rfkill-unblock.service
   systemctl start hotspot-rfkill-unblock.service
+}
+
+configure_hotspot_startup() {
+  local startup_script="/usr/local/sbin/hotspot-startup.sh"
+  local startup_unit="/etc/systemd/system/hotspot-startup.service"
+
+  cat <<'EOF' >"${startup_script}"
+#!/usr/bin/env bash
+set -euo pipefail
+
+WLAN_IFACE="${WLAN_IFACE:-wlan0}"
+MAX_WAIT=60
+LOG_TAG="hotspot-startup"
+
+log_info() {
+  echo "[INFO] $1"
+  logger -t "${LOG_TAG}" "[INFO] $1"
+}
+
+log_error() {
+  echo "[ERROR] $1" >&2
+  logger -t "${LOG_TAG}" "[ERROR] $1"
+}
+
+# Wait for wireless interface to be available
+wait_for_interface() {
+  log_info "Waiting for interface ${WLAN_IFACE} to be available..."
+  local count=0
+  while [[ ! -d "/sys/class/net/${WLAN_IFACE}" ]]; do
+    if [[ ${count} -ge ${MAX_WAIT} ]]; then
+      log_error "Interface ${WLAN_IFACE} not found after ${MAX_WAIT} seconds"
+      return 1
+    fi
+    sleep 1
+    count=$((count + 1))
+  done
+  log_info "Interface ${WLAN_IFACE} found after ${count} seconds"
+  return 0
+}
+
+# Ensure rfkill is unblocked
+unblock_rfkill() {
+  log_info "Unblocking rfkill for wireless devices..."
+  for rf_path in /sys/class/rfkill/rfkill*; do
+    [[ -d ${rf_path} ]] || continue
+    # Only unblock soft blocks (hardware blocks cannot be controlled by software)
+    if [[ -w "${rf_path}/soft" ]]; then
+      echo 0 >"${rf_path}/soft" 2>/dev/null || true
+    fi
+  done
+  # Also use rfkill command if available
+  command -v rfkill >/dev/null 2>&1 && rfkill unblock all || true
+  log_info "rfkill unblock completed"
+}
+
+# Wait for interface to be ready for configuration
+wait_for_interface_ready() {
+  log_info "Waiting for interface ${WLAN_IFACE} to be ready..."
+  local count=0
+  while ! ip link show "${WLAN_IFACE}" >/dev/null 2>&1; do
+    if [[ ${count} -ge ${MAX_WAIT} ]]; then
+      log_error "Interface ${WLAN_IFACE} not ready after ${MAX_WAIT} seconds"
+      return 1
+    fi
+    sleep 1
+    count=$((count + 1))
+  done
+  log_info "Interface ${WLAN_IFACE} ready after ${count} seconds"
+  return 0
+}
+
+# Bring interface up
+bring_interface_up() {
+  log_info "Bringing interface ${WLAN_IFACE} up..."
+  ip link set "${WLAN_IFACE}" up 2>/dev/null || true
+  sleep 2
+}
+
+# Start service with retry logic
+start_service_with_retry() {
+  local service=$1
+  local max_retries=3
+  local retry=0
+
+  while [[ ${retry} -lt ${max_retries} ]]; do
+    log_info "Starting ${service} (attempt $((retry + 1))/${max_retries})..."
+    if systemctl start "${service}"; then
+      log_info "${service} started successfully"
+      return 0
+    fi
+    retry=$((retry + 1))
+    sleep 2
+  done
+
+  log_error "Failed to start ${service} after ${max_retries} attempts"
+  return 1
+}
+
+# Main startup sequence
+main() {
+  log_info "Starting hotspot startup sequence..."
+
+  # Wait for wireless interface
+  if ! wait_for_interface; then
+    log_error "Failed waiting for wireless interface"
+    exit 1
+  fi
+
+  # Unblock rfkill
+  unblock_rfkill
+
+  # Wait for interface to be ready
+  if ! wait_for_interface_ready; then
+    log_error "Failed waiting for interface to be ready"
+    exit 1
+  fi
+
+  # Bring interface up
+  bring_interface_up
+
+  # Stop services if they are running (to ensure clean start)
+  log_info "Stopping services for clean start..."
+  systemctl stop hostapd 2>/dev/null || true
+  systemctl stop dnsmasq 2>/dev/null || true
+  sleep 1
+
+  # Start dhcpcd to configure the static IP
+  log_info "Ensuring dhcpcd is running..."
+  systemctl start dhcpcd || true
+  sleep 3
+
+  # Wait for IPv4 address to be configured
+  log_info "Waiting for IP configuration on ${WLAN_IFACE}..."
+  local ip_wait=0
+  while ! ip addr show "${WLAN_IFACE}" 2>/dev/null | grep -q 'inet [0-9]'; do
+    if [[ ${ip_wait} -ge 30 ]]; then
+      log_error "IP not configured on ${WLAN_IFACE} after 30 seconds"
+      break
+    fi
+    sleep 1
+    ip_wait=$((ip_wait + 1))
+  done
+
+  # Start dnsmasq
+  start_service_with_retry dnsmasq || true
+  sleep 2
+
+  # Start hostapd
+  start_service_with_retry hostapd || true
+  sleep 2
+
+  # Start nginx
+  start_service_with_retry nginx || true
+
+  log_info "Hotspot startup sequence completed"
+  
+  # Log final status
+  log_info "Service status:"
+  log_info "  dhcpcd: $(systemctl is-active dhcpcd)"
+  log_info "  dnsmasq: $(systemctl is-active dnsmasq)"
+  log_info "  hostapd: $(systemctl is-active hostapd)"
+  log_info "  nginx: $(systemctl is-active nginx)"
+
+  exit 0
+}
+
+main "$@"
+EOF
+  chmod 755 "${startup_script}"
+
+  cat <<'EOF' >"${startup_unit}"
+[Unit]
+Description=Hotspot Startup Sequencer
+After=local-fs.target sysinit.target hotspot-rfkill-unblock.service
+Wants=hotspot-rfkill-unblock.service
+Before=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hotspot-startup.sh
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable hotspot-startup.service
 }
 
 configure_dhcpcd() {
@@ -217,10 +475,17 @@ EOF
 
 restore_services() {
   systemctl unmask hostapd || true
-  systemctl enable hostapd dnsmasq
+  systemctl enable dhcpcd
+  systemctl enable hostapd
+  systemctl enable dnsmasq
+  systemctl enable nginx
   systemctl restart dhcpcd
+  sleep 2
   systemctl restart dnsmasq
+  sleep 1
   systemctl restart hostapd
+  sleep 1
+  systemctl restart nginx
 }
 
 main() {
@@ -231,6 +496,7 @@ main() {
   install_packages
   ensure_dhcpcd
   configure_rfkill_unit
+  configure_hotspot_startup
   configure_dhcpcd
   configure_sysctl
   configure_dnsmasq

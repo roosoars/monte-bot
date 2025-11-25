@@ -120,17 +120,190 @@ sudo systemctl restart rpicam-hls.service
 
 ## Solução de problemas
 
+### Hotspot não inicia automaticamente ao ligar
+
+Se o hotspot WiFi não estiver iniciando automaticamente quando o Raspberry Pi é ligado:
+
+1. **Ver logs do serviço de startup:**
+   ```bash
+   sudo journalctl -u hotspot-startup.service -b
+   ```
+
+2. **Ver logs do hostapd:**
+   ```bash
+   sudo journalctl -u hostapd -b
+   ```
+
+3. **Reiniciar o serviço de hotspot manualmente:**
+   ```bash
+   sudo systemctl restart hotspot-startup.service
+   ```
+
+4. **Ou reiniciar serviços individualmente:**
+   ```bash
+   sudo systemctl restart dhcpcd
+   sudo systemctl restart dnsmasq
+   sudo systemctl restart hostapd
+   sudo systemctl restart nginx
+   ```
+
+5. **Verificar status de todos os serviços:**
+   ```bash
+   systemctl status hostapd dnsmasq nginx dhcpcd hotspot-startup.service
+   ```
+
+### Erro "Release file not valid yet" durante apt-get update
+
+Se você receber erros como:
+```
+E: Release file for deb.debian.org/debian-security/dists/bookworm-security/InRelease is not valid yet (invalid for another 3h 54min 21s)
+```
+
+Isso significa que o **relógio do sistema está atrasado**. O Raspberry Pi não possui um RTC (Real-Time Clock) de hardware e depende do NTP para sincronizar o horário. Se a internet não estiver disponível no boot, o relógio pode ficar dessincronizado.
+
+**Solução automática:** Os scripts `setup_hotspot.sh` e `setup_camera_stream.sh` agora incluem verificação e sincronização automática do relógio antes de executar `apt-get update`.
+
+**Solução manual:**
+1. **Verificar status do horário:**
+   ```bash
+   timedatectl status
+   ```
+
+2. **Forçar sincronização NTP:**
+   ```bash
+   sudo timedatectl set-ntp true
+   sudo systemctl restart systemd-timesyncd
+   ```
+
+3. **Aguardar sincronização (ou usar ntpdate como alternativa):**
+   ```bash
+   sudo apt-get install ntpdate
+   sudo ntpdate -u pool.ntp.org
+   ```
+
+4. **Definir horário manualmente (último recurso):**
+   ```bash
+   sudo date -s "2024-01-15 14:30:00"
+   ```
+
+### Outros problemas comuns
+
 - **Hotspot não aparece**: verifique se `rfkill list` está liberado. O script já mascara serviços relacionados; execute `sudo rfkill unblock all` como medida adicional.  
 - **Serviço `hostapd` falha**: revise `/etc/hostapd/hostapd.conf` para conferir SSID/senha válidos e execute `sudo journalctl -u hostapd -b`.  
 - **Stream sem vídeo**: confirme que a câmera está detectada (`libcamera-hello`). Erros comuns aparecem em `journalctl -u rpicam-hls.service`.  
 - **Interface web sem UI**: valide se os assets foram copiados para `/var/www/html/static`. Em ambientes sem internet, garanta que a pasta `assets/` permaneça intacta antes da execução do script.
 
+## Novas funcionalidades
+
+### Interface web aprimorada
+
+O sistema agora inclui páginas web para controle do robô:
+
+1. **Página de configuração** (`/index.html`)
+   - Menu principal com acesso às funcionalidades do sistema
+   - Acesso rápido ao modo Live, Configurações, Posição, Logs e Calibração
+   - Exibe informações de rede e IP do robô
+
+2. **Página Live** (`/live.html`)
+   - Interface de controle em tempo real otimizada para smartphones em modo paisagem
+   - Stream de vídeo HLS em tela cheia
+   - Controle por slide horizontal para ajustes direcionais precisos
+   - Joystick virtual para movimentação completa (frente, trás, esquerda, direita)
+   - Detecção automática de pessoas usando MediaPipe
+   - Indicador de status que mostra o movimento sugerido baseado na posição da pessoa detectada
+   - Lógica de parada automática quando a pessoa está a aproximadamente 2 metros (área maior que 20% do quadro)
+   - Lógica de recuo quando a pessoa está muito próxima (área maior que 30% do quadro)
+   - Overlays visuais mostrando a caixa delimitadora da pessoa detectada
+   - Status de conexão WebSocket e Serial em tempo real
+
+3. **Página de Posição** (`/position.html`)
+   - Exibe em tempo real o comando de direção para os motores
+   - Comandos: **P** (Parado), **F** (Frente), **T** (Trás), **D** (Direita), **E** (Esquerda)
+   - Ideal para integração com sistema de controle de motores
+   - Lê dados do localStorage compartilhado com a página Live
+   - Pode ser acessada em dispositivo separado para enviar comandos aos motores
+
+4. **Página de Logs em Tempo Real** (`/logs.html`)
+   - Monitoramento em tempo real de todas as comunicações do sistema
+   - Exibe logs do WebSocket, Serial/USB, comandos enviados e respostas do Arduino
+   - Filtros por fonte (WebSocket, Serial, Comandos, Arduino, Sistema) e nível (DEBUG, INFO, WARNING, ERROR)
+   - Busca textual nos logs
+   - Estatísticas de comandos enviados/falhos e porta serial conectada
+   - Envio manual de comandos para teste e debug
+   - Botões de comando rápido (F, T, E, D, P, E1, D1, P1)
+   - Auto-scroll com indicador de novos logs
+   - Reconexão automática de WebSocket e Serial
+
+### Comunicação Serial Aprimorada
+
+O sistema agora inclui um serviço de bridge serial (`montebot-serial.service`) que:
+- **Auto-detecta portas USB**: Busca automaticamente em `/dev/ttyACM*`, `/dev/ttyUSB*`, `/dev/ttyAMA*` e `/dev/serial*`
+- **Broadcast de logs**: Envia todos os eventos para clientes WebSocket em tempo real
+- **Reconexão automática**: Tenta reconectar automaticamente se a conexão serial for perdida
+- **Histórico de logs**: Mantém os últimos 500 eventos para novos clientes
+- **Leitura de respostas**: Captura e exibe respostas do Arduino
+
+### Melhorias no startup do hotspot
+
+O script `setup_hotspot.sh` agora inclui um serviço de inicialização sequenciado (`hotspot-startup.service`) que:
+- Aguarda o sistema estar completamente pronto antes de iniciar os serviços
+- Inicia os serviços na ordem correta: dhcpcd → dnsmasq → hostapd → nginx
+- Adiciona delays entre cada inicialização para garantir estabilidade
+- Previne falhas de inicialização causadas por condições de corrida
+
+## Código Arduino para Controle de Motores
+
+O sistema Monte Bot requer um Arduino conectado via USB ao Raspberry Pi para controlar os motores do robô. O código completo está disponível na pasta `arduino/`.
+
+### Instalação Rápida do Arduino
+
+1. Abra o Arduino IDE
+2. Abra o arquivo `arduino/montebot_motor_controller/montebot_motor_controller.ino`
+3. Selecione sua placa e porta
+4. Faça upload do código
+5. Conecte o Arduino ao Raspberry Pi via USB
+
+### Protocolo de Comandos
+
+| Comando | Descrição |
+|---------|-----------|
+| `F` | Frente (Forward) |
+| `T` | Trás (Back) |
+| `E` | Esquerda (Left) |
+| `D` | Direita (Right) |
+| `P` | Parado (Stop) |
+| `E1` | Ajuste fino para esquerda (slide) |
+| `D1` | Ajuste fino para direita (slide) |
+| `P1` | Sem ajuste (slide centro) |
+
+### Conexões do Hardware
+
+Consulte `arduino/README.md` para diagrama completo de conexões.
+
+**Resumo das conexões (Arduino → L298N):**
+- Pino 2 → IN1 (Motor Esquerdo)
+- Pino 3 → IN2 (Motor Esquerdo)
+- Pino 4 → IN3 (Motor Direito)
+- Pino 5 → IN4 (Motor Direito)
+- ENA → Jumper para +5V (velocidade fixa)
+- ENB → Jumper para +5V (velocidade fixa)
+- GND → GND comum
+
+**Servo Motor:**
+- Pino 9 → Sinal do Servo
+- 5V → VCC do Servo
+- GND → GND do Servo
+
 ## Estrutura do repositório
 
 ```
+arduino/                    # Código Arduino para controle de motores
+  montebot_motor_controller/  # Sketch principal do Arduino
+  README.md                   # Documentação detalhada do Arduino
 assets/                     # Bibliotecas, modelos e WASM empacotados para uso offline
 setup_hotspot.sh            # Script de provisionamento do hotspot / nginx
 setup_camera_stream.sh      # Script de streaming HLS e interface web
+create_web_pages.sh         # Script para criação das páginas web do sistema
 ```
 
 Mantenha o repositório versionado juntamente com a configuração do robô para facilitar auditoria e replicação do ambiente em novas unidades.
