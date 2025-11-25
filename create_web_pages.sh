@@ -474,7 +474,23 @@ create_config_page() {
           updateStatus('HLS não suportado', 'error');
           return;
         }
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        // Ultra-low latency HLS configuration
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 0.5,           // Minimal back buffer for stability
+          maxBufferLength: 1,
+          maxMaxBufferLength: 2,
+          liveSyncDurationCount: 1,
+          liveMaxLatencyDurationCount: 2,
+          liveDurationInfinity: true,
+          highBufferWatchdogPeriod: 1,
+          nudgeOffset: 0.1,
+          maxFragLookUpTolerance: 0.1,
+          maxLoadingDelay: 1,
+          startFragPrefetch: true,
+          testBandwidth: false
+        });
         hls.loadSource(source);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
@@ -1199,7 +1215,7 @@ create_live_page() {
     // Tracking state
     let lastHeadPosition = HEAD_CENTER;
     let trackingCooldown = 0;        // Prevent rapid command spam
-    const TRACKING_COOLDOWN_MS = 500; // Min time between tracking maneuvers
+    const TRACKING_COOLDOWN_MS = 300; // Min time between tracking maneuvers (300ms for faster response)
 
     const analysisCanvas = document.createElement('canvas');
     const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
@@ -1232,13 +1248,41 @@ create_live_page() {
           console.error('[MonteBot] HLS não suportado');
           return;
         }
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 10, maxBufferLength: 5 });
+        // Ultra-low latency HLS configuration
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 0.5,           // Minimal back buffer for stability           // No back buffer
+          maxBufferLength: 1,            // Minimal buffer (1 second max)
+          maxMaxBufferLength: 2,         // Hard limit on buffer
+          liveSyncDurationCount: 1,      // Sync to 1 segment behind live
+          liveMaxLatencyDurationCount: 2, // Max 2 segments latency
+          liveDurationInfinity: true,    // Infinite live duration
+          highBufferWatchdogPeriod: 1,   // Fast buffer checking
+          nudgeOffset: 0.1,              // Small nudge for sync
+          nudgeMaxRetry: 5,              // Retry sync quickly
+          maxFragLookUpTolerance: 0.1,   // Faster fragment lookup
+          maxLoadingDelay: 1,            // Max 1s loading delay
+          fragLoadingTimeOut: 4000,      // 4s fragment timeout
+          fragLoadingMaxRetry: 2,        // Quick retry
+          startFragPrefetch: true,       // Prefetch fragments
+          testBandwidth: false           // Skip bandwidth tests for speed
+        });
         hls.loadSource(source);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
           video.play().catch(() => {});
           ensureVideoSizing();
           initTracking();
+        });
+        // Auto-sync to live edge on stall
+        hls.on(Hls.Events.ERROR, function (event, data) {
+          if (data.details === 'bufferStalledError') {
+            console.log('[MonteBot] Buffer stalled, syncing to live edge');
+            if (hls.liveSyncPosition !== null && hls.liveSyncPosition !== undefined) {
+              video.currentTime = hls.liveSyncPosition;
+            }
+          }
         });
       };
       script.src = 'static/hls.min.js';

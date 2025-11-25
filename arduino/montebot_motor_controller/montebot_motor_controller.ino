@@ -96,9 +96,9 @@
 #define SLIDE_CENTER_POS    90   // Posição central para ajuste fino (slide)
 #define SLIDE_RIGHT_POS     120  // Posição direita para ajuste fino (slide)
 
-// Tempos para manobras de rastreamento (em milissegundos)
-#define TRACK_TURN_TIME     200   // Tempo que fica virando (200ms)
-#define TRACK_FORWARD_TIME  150   // Tempo que anda para frente após virar (150ms)
+// Tempos para manobras de rastreamento (em milissegundos) - otimizado para resposta rápida
+#define TRACK_TURN_TIME     180   // Tempo que fica virando (180ms - balanceado)
+#define TRACK_FORWARD_TIME  120   // Tempo que anda para frente após virar (120ms - balanceado)
 
 // LED de status
 #define STATUS_LED  LED_BUILTIN  // Pino 13 na maioria dos Arduinos
@@ -130,7 +130,7 @@ bool rightForward = true;
 
 // Controle de tempo
 unsigned long lastCommandTime = 0;
-const unsigned long TIMEOUT_MS = 500;  // Timeout de segurança (para comandos)
+const unsigned long TIMEOUT_MS = 400;  // Timeout de segurança reduzido para resposta mais rápida
 
 // Buffer de entrada serial
 String inputBuffer = "";

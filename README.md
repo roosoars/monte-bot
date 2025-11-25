@@ -48,6 +48,17 @@ Edite as variáveis no topo do script antes de executar para ajustar rede, segur
 
 ### Streaming (`setup_camera_stream.sh`)
 
+O sistema usa configurações otimizadas para **ultra-baixa latência** no streaming de vídeo:
+
+| Variável | Valor Padrão | Descrição |
+|----------|--------------|-----------|
+| `STREAM_FRAMERATE` | `30` | Taxa de quadros por segundo |
+| `STREAM_WIDTH` | `1280` | Largura do vídeo (otimizado para velocidade) |
+| `STREAM_HEIGHT` | `720` | Altura do vídeo (720p para menor latência) |
+| `STREAM_BITRATE` | `4000000` | Taxa de bits (4 Mbps - balanceado) |
+| `HLS_SEGMENT_SECONDS` | `0.2` | Duração do segmento HLS (200ms ultra-curto) |
+| `HLS_LIST_SIZE` | `3` | Número de segmentos na playlist |
+
 O binário `rpicam-hls.sh` aceita variáveis de ambiente para ajustar o stream. Crie um drop-in systemd para preservar mudanças:
 
 ```bash
@@ -58,10 +69,10 @@ Exemplo de conteúdo:
 
 ```ini
 [Service]
-Environment=STREAM_FRAMERATE=24
+Environment=STREAM_FRAMERATE=30
 Environment=STREAM_WIDTH=1280
 Environment=STREAM_HEIGHT=720
-Environment=STREAM_BITRATE=6000000
+Environment=STREAM_BITRATE=4000000
 ```
 
 Recarregue e reinicie:

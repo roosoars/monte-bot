@@ -218,13 +218,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Ultra-low latency streaming settings
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
-STREAM_WIDTH="${STREAM_WIDTH:-1920}"
-STREAM_HEIGHT="${STREAM_HEIGHT:-1080}"
-STREAM_BITRATE="${STREAM_BITRATE:-10000000}"
-STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-${STREAM_FRAMERATE}}"
-HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.4}"
-HLS_LIST_SIZE="${HLS_LIST_SIZE:-4}"
+STREAM_WIDTH="${STREAM_WIDTH:-1280}"
+STREAM_HEIGHT="${STREAM_HEIGHT:-720}"
+STREAM_BITRATE="${STREAM_BITRATE:-4000000}"
+# Keyframe every 15 frames (0.5s at 30fps) for faster seeking
+STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-15}"
+# Ultra-short segments for minimal latency (0.2 seconds)
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.2}"
+# Minimal playlist size for faster updates
+HLS_LIST_SIZE="${HLS_LIST_SIZE:-3}"
 
 rpicam-vid \
   --timeout 0 \
@@ -235,14 +239,17 @@ rpicam-vid \
   --bitrate "${STREAM_BITRATE}" \
   --intra "${STREAM_KEYFRAME_INTERVAL}" \
   --codec h264 \
-  --profile high \
-  --level 4.2 \
+  --profile baseline \
+  --level 4.0 \
   --inline \
+  --flush \
   -o - \
   | ffmpeg \
       -loglevel warning \
-      -fflags nobuffer \
+      -fflags nobuffer+flush_packets \
       -flags low_delay \
+      -strict experimental \
+      -avioflags direct \
       -f h264 \
       -i - \
       -an \
@@ -250,7 +257,7 @@ rpicam-vid \
       -f hls \
       -hls_time "${HLS_SEGMENT_SECONDS}" \
       -hls_list_size "${HLS_LIST_SIZE}" \
-      -hls_flags delete_segments+append_list+omit_endlist+independent_segments \
+      -hls_flags delete_segments+append_list+omit_endlist+independent_segments+split_by_time \
       -hls_segment_type mpegts \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
       "${STREAM_DIR}/index.m3u8"
