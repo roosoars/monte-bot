@@ -220,9 +220,9 @@ trap cleanup EXIT
 
 # Ultra-low latency streaming settings
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
-STREAM_WIDTH="${STREAM_WIDTH:-1280}"
-STREAM_HEIGHT="${STREAM_HEIGHT:-720}"
-STREAM_BITRATE="${STREAM_BITRATE:-4000000}"
+STREAM_WIDTH="${STREAM_WIDTH:-640}"
+STREAM_HEIGHT="${STREAM_HEIGHT:-480}"
+STREAM_BITRATE="${STREAM_BITRATE:-1500000}"
 # Keyframe every 15 frames (0.5s at 30fps) for faster seeking
 STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-15}"
 # Ultra-short segments for minimal latency (0.2 seconds)

@@ -53,9 +53,9 @@ O sistema usa configurações otimizadas para **ultra-baixa latência** no strea
 | Variável | Valor Padrão | Descrição |
 |----------|--------------|-----------|
 | `STREAM_FRAMERATE` | `30` | Taxa de quadros por segundo |
-| `STREAM_WIDTH` | `1280` | Largura do vídeo (otimizado para velocidade) |
-| `STREAM_HEIGHT` | `720` | Altura do vídeo (720p para menor latência) |
-| `STREAM_BITRATE` | `4000000` | Taxa de bits (4 Mbps - balanceado) |
+| `STREAM_WIDTH` | `640` | Largura do vídeo (480p para menor latência) |
+| `STREAM_HEIGHT` | `480` | Altura do vídeo (480p para streaming quase instantâneo) |
+| `STREAM_BITRATE` | `1500000` | Taxa de bits (1.5 Mbps - otimizado para velocidade) |
 | `HLS_SEGMENT_SECONDS` | `0.2` | Duração do segmento HLS (200ms ultra-curto) |
 | `HLS_LIST_SIZE` | `3` | Número de segmentos na playlist |
 
@@ -70,9 +70,9 @@ Exemplo de conteúdo:
 ```ini
 [Service]
 Environment=STREAM_FRAMERATE=30
-Environment=STREAM_WIDTH=1280
-Environment=STREAM_HEIGHT=720
-Environment=STREAM_BITRATE=4000000
+Environment=STREAM_WIDTH=640
+Environment=STREAM_HEIGHT=480
+Environment=STREAM_BITRATE=1500000
 ```
 
 Recarregue e reinicie:
