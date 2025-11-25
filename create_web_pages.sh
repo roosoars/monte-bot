@@ -183,6 +183,9 @@ create_index_page() {
       <p><strong>Dica:</strong> Configure o alvo e use "Live" para rastrear.</p>
       <p><strong>Rede:</strong> Conectado ao hotspot MonteHotspot</p>
       <p><strong>IP:</strong> 192.168.50.1</p>
+      <div id="serial-status" class="target-status no-target">
+        <p id="serial-text">🔴 Serial: Verificando...</p>
+      </div>
       <div id="target-status" class="target-status no-target">
         <p id="target-text">⚠️ Nenhum alvo configurado</p>
       </div>
@@ -197,6 +200,65 @@ create_index_page() {
       targetStatus.classList.remove('no-target');
       targetText.textContent = '✅ Alvo configurado e pronto para seguir';
     }
+    
+    // Check serial status from localStorage
+    const serialConnected = localStorage.getItem('montebot_serial_connected');
+    const serialPort = localStorage.getItem('montebot_serial_port');
+    const serialStatus = document.getElementById('serial-status');
+    const serialText = document.getElementById('serial-text');
+    
+    if (serialConnected === 'true') {
+      serialStatus.classList.remove('no-target');
+      serialText.textContent = '🟢 Serial: ' + (serialPort || 'Conectado');
+    } else if (serialConnected === 'false') {
+      serialText.textContent = '🔴 Serial: Desconectado';
+    }
+    
+    // WebSocket connection to check live status
+    const WS_URL = 'ws://' + window.location.hostname + ':8765';
+    let ws = null;
+    let wsReconnectTimer = null;
+    
+    function connectWebSocket() {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      
+      try {
+        ws = new WebSocket(WS_URL);
+        
+        ws.onopen = () => {
+          console.log('[MonteBot] Menu: WebSocket conectado');
+        };
+        
+        ws.onclose = () => {
+          ws = null;
+          wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+        };
+        
+        ws.onerror = () => {};
+        
+        ws.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.type === 'status' && data.serial) {
+              if (data.serial.connected) {
+                serialStatus.classList.remove('no-target');
+                serialText.textContent = '🟢 Serial: ' + (data.serial.port || 'Conectado');
+                localStorage.setItem('montebot_serial_connected', 'true');
+                if (data.serial.port) localStorage.setItem('montebot_serial_port', data.serial.port);
+              } else {
+                serialStatus.classList.add('no-target');
+                serialText.textContent = '🔴 Serial: Desconectado';
+                localStorage.setItem('montebot_serial_connected', 'false');
+              }
+            }
+          } catch (err) {}
+        };
+      } catch (e) {
+        wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+      }
+    }
+    
+    connectWebSocket();
   </script>
 </body>
 </html>
@@ -1102,22 +1164,37 @@ create_live_page() {
     const source = 'stream/index.m3u8';
 
     // Tracking pause state - when paused, only manual controls work
-    let trackingPaused = false;
+    // Restore from localStorage for persistence across page navigation
+    let trackingPaused = localStorage.getItem('montebot_tracking_paused') === 'true';
 
     // WebSocket for serial communication
     let ws = null;
     let wsReconnectTimer = null;
     let serialConnected = false;
+    let lastSerialPort = localStorage.getItem('montebot_serial_port') || null;
     const WS_URL = 'ws://' + window.location.hostname + ':8765';
+    
+    // Persistence functions
+    function saveState() {
+      localStorage.setItem('montebot_tracking_paused', trackingPaused);
+      if (serialConnected && lastSerialPort) {
+        localStorage.setItem('montebot_serial_port', lastSerialPort);
+        localStorage.setItem('montebot_serial_connected', 'true');
+      }
+    }
 
     function updateSerialStatus(connected, port) {
       serialConnected = connected;
+      if (port) lastSerialPort = port;
       if (connected) {
         serialIndicator.textContent = '🟢 Serial' + (port ? ': ' + port : '');
         serialIndicator.className = 'connected';
+        localStorage.setItem('montebot_serial_connected', 'true');
+        if (port) localStorage.setItem('montebot_serial_port', port);
       } else {
         serialIndicator.textContent = '🔴 Serial';
         serialIndicator.className = 'disconnected';
+        localStorage.setItem('montebot_serial_connected', 'false');
       }
     }
 
@@ -1127,6 +1204,7 @@ create_live_page() {
         serialIndicator.textContent = '🔴 WS Offline';
         serialIndicator.className = 'disconnected';
       }
+      localStorage.setItem('montebot_ws_connected', connected ? 'true' : 'false');
     }
 
     function connectWebSocket() {
@@ -1839,6 +1917,7 @@ create_live_page() {
     // Toggle button handler - pause/resume automatic tracking
     trackingToggle.addEventListener('click', () => {
       trackingPaused = !trackingPaused;
+      saveState();  // Persist tracking state
       if (trackingPaused) {
         trackingToggle.textContent = '⏸️ Rastreamento OFF';
         trackingToggle.classList.add('paused');
@@ -1852,6 +1931,13 @@ create_live_page() {
         console.log('[MonteBot] Rastreamento retomado');
       }
     });
+    
+    // Restore tracking toggle state on page load
+    if (trackingPaused) {
+      trackingToggle.textContent = '⏸️ Rastreamento OFF';
+      trackingToggle.classList.add('paused');
+      detectionStatus.textContent = 'M';
+    }
 
     loadStream();
   </script>
@@ -2578,10 +2664,14 @@ create_logs_page() {
         serialStatus.className = 'status-badge connected';
         serialStatusText.textContent = 'Serial: ' + (serialInfo.port || 'Conectado');
         statPort.textContent = serialInfo.port || '-';
+        // Persist serial state
+        localStorage.setItem('montebot_serial_connected', 'true');
+        if (serialInfo.port) localStorage.setItem('montebot_serial_port', serialInfo.port);
       } else {
         serialStatus.className = 'status-badge disconnected';
         serialStatusText.textContent = 'Serial: Desconectado';
         statPort.textContent = serialInfo.last_error ? 'Erro' : '-';
+        localStorage.setItem('montebot_serial_connected', 'false');
       }
     }
 

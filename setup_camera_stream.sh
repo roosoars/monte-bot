@@ -210,13 +210,56 @@ write_camera_runner() {
 set -euo pipefail
 
 STREAM_DIR="/var/www/html/stream"
+LOG_TAG="rpicam-hls"
+
+log_info() {
+  echo "[INFO] $1"
+  logger -t "${LOG_TAG}" "[INFO] $1" 2>/dev/null || true
+}
+
+log_error() {
+  echo "[ERROR] $1" >&2
+  logger -t "${LOG_TAG}" "[ERROR] $1" 2>/dev/null || true
+}
+
 mkdir -p "${STREAM_DIR}"
 umask 022
 
 cleanup() {
+  log_info "Cleaning up stream files..."
   find "${STREAM_DIR}" -type f \( -name '*.ts' -o -name '*.m3u8' \) -delete || true
 }
 trap cleanup EXIT
+
+# Wait for camera to be ready
+wait_for_camera() {
+  log_info "Waiting for camera to be ready..."
+  local max_wait=30
+  local waited=0
+  
+  while [[ ${waited} -lt ${max_wait} ]]; do
+    # Check if rpicam-vid can detect a camera
+    if rpicam-vid --list-cameras 2>/dev/null | grep -q "Available cameras"; then
+      log_info "Camera detected after ${waited} seconds"
+      return 0
+    fi
+    
+    # Alternative check: look for video devices
+    if [[ -e /dev/video0 ]]; then
+      log_info "Video device found after ${waited} seconds"
+      return 0
+    fi
+    
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $((waited % 5)) -eq 0 ]]; then
+      log_info "Still waiting for camera... (${waited}/${max_wait}s)"
+    fi
+  done
+  
+  log_error "Camera not detected after ${max_wait} seconds"
+  return 1
+}
 
 # Ultra-low latency streaming settings
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
@@ -230,6 +273,18 @@ HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.2}"
 # Minimal playlist size for faster updates
 HLS_LIST_SIZE="${HLS_LIST_SIZE:-3}"
 
+log_info "Starting camera stream service"
+log_info "Settings: ${STREAM_WIDTH}x${STREAM_HEIGHT} @ ${STREAM_FRAMERATE}fps, bitrate=${STREAM_BITRATE}"
+
+# Wait for camera to be ready
+if ! wait_for_camera; then
+  log_error "Failed to detect camera, exiting"
+  exit 1
+fi
+
+log_info "Starting rpicam-vid and ffmpeg pipeline..."
+
+# Run the pipeline with error handling
 rpicam-vid \
   --timeout 0 \
   --nopreview \
@@ -244,7 +299,7 @@ rpicam-vid \
   --inline \
   --flush \
   -o - \
-  | ffmpeg \
+  2>&1 | ffmpeg \
       -loglevel warning \
       -fflags nobuffer+flush_packets \
       -flags low_delay \
@@ -261,6 +316,12 @@ rpicam-vid \
       -hls_segment_type mpegts \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
       "${STREAM_DIR}/index.m3u8"
+
+PIPELINE_EXIT=$?
+if [[ ${PIPELINE_EXIT} -ne 0 ]]; then
+  log_error "Pipeline exited with code ${PIPELINE_EXIT}"
+  exit ${PIPELINE_EXIT}
+fi
 EOF
   chmod 755 "${CAMERA_RUNNER}"
 }
@@ -270,14 +331,20 @@ write_systemd_service() {
 [Unit]
 Description=Streaming da câmera Raspberry Pi (rpicam + HLS)
 After=network.target nginx.service
+Wants=nginx.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
+ExecStartPre=/bin/sleep 3
 ExecStart=${CAMERA_RUNNER}
-Restart=on-failure
+Restart=always
 RestartSec=5
+TimeoutStartSec=60
 StandardOutput=journal
 StandardError=journal
+WatchdogSec=120
 
 [Install]
 WantedBy=multi-user.target
@@ -613,22 +680,51 @@ async def handle_connection(websocket):
 async def periodic_status():
     """Periodically check and broadcast status."""
     global ser
+    reconnect_attempts = 0
+    max_reconnect_wait = 30  # Max seconds between reconnect attempts
+    
     while True:
-        await asyncio.sleep(10)  # Every 10 seconds
+        await asyncio.sleep(5)  # Every 5 seconds for faster response
+        
+        # Broadcast current status to all clients
+        if connected_clients:
+            status_msg = json.dumps({
+                "type": "status",
+                "serial": serial_status,
+                "stats": command_stats,
+                "clients": len(connected_clients)
+            })
+            disconnected = set()
+            for client in connected_clients:
+                try:
+                    await client.send(status_msg)
+                except Exception:
+                    disconnected.add(client)
+            connected_clients.difference_update(disconnected)
         
         # Check serial connection
         if ser:
             try:
                 if not ser.is_open:
                     await log_and_broadcast("WARNING", "SERIAL", "Serial port closed unexpectedly, reconnecting...")
+                    reconnect_attempts = 0
                     await init_serial()
             except Exception:
                 await log_and_broadcast("WARNING", "SERIAL", "Serial connection lost, reconnecting...")
+                reconnect_attempts = 0
                 await init_serial()
         else:
-            # Try to reconnect if we don't have a connection
-            await log_and_broadcast("DEBUG", "SERIAL", "Attempting to find serial port...")
-            await init_serial()
+            # Try to reconnect with exponential backoff
+            reconnect_attempts += 1
+            wait_time = min(5 * reconnect_attempts, max_reconnect_wait)
+            
+            if reconnect_attempts <= 3 or reconnect_attempts % 6 == 0:  # Log every 30 seconds after initial attempts
+                await log_and_broadcast("DEBUG", "SERIAL", f"Attempting to find serial port (attempt {reconnect_attempts})...")
+            
+            result = await init_serial()
+            if result:
+                reconnect_attempts = 0
+                await log_and_broadcast("INFO", "SERIAL", "Serial port reconnected successfully")
 
 async def main():
     """Main entry point."""
@@ -671,17 +767,22 @@ write_serial_service() {
 [Unit]
 Description=Monte Bot Serial Bridge (WebSocket to Arduino)
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
+ExecStartPre=/bin/sleep 2
 ExecStart=/usr/bin/python3 ${SERIAL_BRIDGE_SCRIPT}
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=3
+TimeoutStartSec=60
 StandardOutput=journal
 StandardError=journal
 User=root
 Group=dialout
-Environment=SERIAL_PORT=/dev/ttyACM0
+# Empty SERIAL_PORT enables auto-detection of serial devices
+Environment=SERIAL_PORT=
 Environment=SERIAL_BAUDRATE=115200
 
 [Install]
