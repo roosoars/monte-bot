@@ -1181,6 +1181,21 @@ create_live_page() {
     let lostFrames = 0;
     const MIN_DISTANCE_AREA = 0.20;  // Stop at ~2m distance
     const MAX_DISTANCE_AREA = 0.30;  // Back up when too close
+    
+    // Smart tracking thresholds
+    const OFFSET_SLIGHT = 0.10;      // Slight offset - simple turn
+    const OFFSET_MEDIUM = 0.25;      // Medium offset - turn + forward
+    const OFFSET_EXTREME = 0.40;     // Extreme offset - head turn + track maneuver
+    
+    // Head servo positions (matching Arduino constants)
+    const HEAD_CENTER = 90;          // Center position
+    const HEAD_MAX_LEFT = 180;       // Maximum left (0-90 range from center)
+    const HEAD_MAX_RIGHT = 0;        // Maximum right (0-90 range from center)
+    
+    // Tracking state
+    let lastHeadPosition = HEAD_CENTER;
+    let trackingCooldown = 0;        // Prevent rapid command spam
+    const TRACKING_COOLDOWN_MS = 500; // Min time between tracking maneuvers
 
     const analysisCanvas = document.createElement('canvas');
     const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
@@ -1497,8 +1512,41 @@ create_live_page() {
 
     let lastDetectionCmd = 'P';
 
+    /**
+     * Calculate head servo position based on user offset
+     * Maps offset (-0.5 to 0.5) to servo angle (0-180)
+     * Limits maximum rotation to 90 degrees from center
+     */
+    function calculateHeadPosition(offset) {
+      // Map offset to servo position
+      // offset = -0.5 (far left) -> servo = 180 (look left)
+      // offset = 0 (center) -> servo = 90 (look straight)
+      // offset = 0.5 (far right) -> servo = 0 (look right)
+      let pos = HEAD_CENTER - (offset * 180);
+      
+      // Limit to valid range (0-180)
+      if (pos < HEAD_MAX_RIGHT) pos = HEAD_MAX_RIGHT;
+      if (pos > HEAD_MAX_LEFT) pos = HEAD_MAX_LEFT;
+      
+      return Math.round(pos);
+    }
+    
+    /**
+     * Send head servo command
+     */
+    function sendHeadCommand(position) {
+      if (position !== lastHeadPosition) {
+        lastHeadPosition = position;
+        sendCommand('H' + position);
+        console.log('[MonteBot] Head position:', position);
+      }
+    }
+
     function computeMovement(bbox) {
       let cmd = 'P';
+      let headCmd = null;
+      const now = Date.now();
+      
       if (!bbox) {
         if (cmd !== lastDetectionCmd) {
           lastDetectionCmd = cmd;
@@ -1506,34 +1554,98 @@ create_live_page() {
           localStorage.setItem('montebot_position', cmd);
           sendCommand(cmd);
         }
+        // Center head when no target
+        if (lastHeadPosition !== HEAD_CENTER) {
+          sendHeadCommand(HEAD_CENTER);
+        }
         return;
       }
+      
       const frameArea = Math.max(1, frameWidth * frameHeight);
       const centerX = bbox.originX + bbox.width / 2;
       const areaRatio = (bbox.width * bbox.height) / frameArea;
-      const offset = centerX / frameWidth - 0.5;
+      const offset = centerX / frameWidth - 0.5;  // -0.5 to 0.5 (left to right)
+      const absOffset = Math.abs(offset);
 
       // Too close - back up (T = Trás)
       if (areaRatio >= MAX_DISTANCE_AREA) {
         cmd = 'T';
+        // Center head when backing up
+        headCmd = HEAD_CENTER;
       }
       // Good distance - stop (P = Parado)
       else if (areaRatio >= MIN_DISTANCE_AREA) {
         cmd = 'P';
+        // Center head when at good distance
+        headCmd = HEAD_CENTER;
       }
-      // Person is to the right - turn right (D = Direita)
-      else if (offset > 0.10) {
-        cmd = 'D';
-      }
-      // Person is to the left - turn left (E = Esquerda)
-      else if (offset < -0.10) {
-        cmd = 'E';
+      // Person is significantly off-center - need to track
+      else if (absOffset > OFFSET_SLIGHT) {
+        
+        // EXTREME offset - person is very far to one side
+        // First move head to look at them, then do tracking maneuver
+        if (absOffset > OFFSET_EXTREME) {
+          // Calculate head position to look at user (max 90 degrees from center)
+          headCmd = calculateHeadPosition(offset);
+          
+          // Check cooldown for tracking maneuver
+          if (now - trackingCooldown > TRACKING_COOLDOWN_MS) {
+            // Send smart tracking command (TE or TD)
+            // This makes the robot: turn, advance, return to forward
+            if (offset < 0) {
+              cmd = 'TE';  // Track left
+            } else {
+              cmd = 'TD';  // Track right
+            }
+            trackingCooldown = now;
+          } else {
+            // During cooldown, just turn towards user
+            if (offset < 0) {
+              cmd = 'E';
+            } else {
+              cmd = 'D';
+            }
+          }
+        }
+        // MEDIUM offset - turn + forward to realign
+        else if (absOffset > OFFSET_MEDIUM) {
+          // Slight head movement to track user
+          headCmd = calculateHeadPosition(offset * 0.5);  // Less aggressive head turn
+          
+          // Check cooldown for tracking maneuver
+          if (now - trackingCooldown > TRACKING_COOLDOWN_MS) {
+            if (offset < 0) {
+              cmd = 'TE';  // Track left
+            } else {
+              cmd = 'TD';  // Track right  
+            }
+            trackingCooldown = now;
+          } else {
+            cmd = 'F';  // Move forward during cooldown
+          }
+        }
+        // SLIGHT offset - simple turn to align
+        else {
+          headCmd = HEAD_CENTER;  // Keep head centered
+          if (offset < 0) {
+            cmd = 'E';  // Turn left
+          } else {
+            cmd = 'D';  // Turn right
+          }
+        }
       }
       // Person is centered - go forward (F = Frente)
       else {
         cmd = 'F';
+        headCmd = HEAD_CENTER;  // Keep head centered when moving forward
       }
 
+      // Send head command if needed
+      if (headCmd !== null) {
+        sendHeadCommand(headCmd);
+      }
+
+      // Send movement command
       if (cmd !== lastDetectionCmd) {
         lastDetectionCmd = cmd;
         detectionStatus.textContent = cmd;
@@ -2173,7 +2285,7 @@ create_logs_page() {
 
   <div class="command-input-area">
     <div class="command-input-wrapper">
-      <input type="text" id="command-input" class="command-input" placeholder="Digite um comando para enviar ao Arduino (ex: F, T, E, D, P)..." />
+      <input type="text" id="command-input" class="command-input" placeholder="Digite um comando para enviar ao Arduino (ex: F, T, E, D, P, TE, TD, H90)..." />
       <button id="send-command">Enviar</button>
     </div>
     <div class="quick-commands">
@@ -2185,6 +2297,11 @@ create_logs_page() {
       <button class="quick-cmd" data-cmd="E1">E1 - Slide Esq</button>
       <button class="quick-cmd" data-cmd="D1">D1 - Slide Dir</button>
       <button class="quick-cmd" data-cmd="P1">P1 - Slide Centro</button>
+      <button class="quick-cmd left" data-cmd="TE">TE - Track Esq</button>
+      <button class="quick-cmd right" data-cmd="TD">TD - Track Dir</button>
+      <button class="quick-cmd" data-cmd="H0">H0 - Cabeça Dir</button>
+      <button class="quick-cmd" data-cmd="H90">H90 - Cabeça Centro</button>
+      <button class="quick-cmd" data-cmd="H180">H180 - Cabeça Esq</button>
     </div>
   </div>
 

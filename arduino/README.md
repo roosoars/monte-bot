@@ -17,7 +17,15 @@ Firmware completo para controle de motores do robô R2D2 Monte Bot, desenvolvido
 
 Este firmware recebe comandos via Serial USB do Raspberry Pi e controla os motores do robô de acordo com o protocolo definido pelo sistema Monte Bot. É 100% compatível com o servidor WebSocket (`montebot-serial-bridge.py`) que roda no Raspberry Pi.
 
-**Nota:** Esta versão opera sem controle PWM de velocidade. Os motores funcionam em velocidade máxima fixa (ENA/ENB conectados via jumper a +5V). Um servo motor no pino 9 é usado para ajustes de direção.
+**Nota:** Esta versão opera sem controle PWM de velocidade. Os motores funcionam em velocidade máxima fixa (ENA/ENB conectados via jumper a +5V). Um servo motor no pino 9 é usado para movimentação da cabeça do robô e ajustes de direção.
+
+### Funcionalidades
+
+- **Controle de Motores**: Movimentação em todas as direções (frente, trás, esquerda, direita)
+- **Servo da Cabeça**: Rotação de 0° a 180° para rastreamento visual do usuário
+- **Rastreamento Inteligente**: Comandos que executam manobras compostas (virar + avançar + recentrar)
+- **Ajuste Fino**: Comandos de slide para correções precisas de trajetória
+- **Segurança**: Timeout automático que para os motores se não receber comandos
 
 ### Fluxo de Comunicação
 
@@ -193,13 +201,15 @@ cd monte-bot/arduino/montebot_motor_controller
     MONTE BOT - Motor Controller
     Liga Academica MONTE BOT - UFU
 ========================================
-VERSION:1.0.0
+VERSION:1.2.0
 BAUDRATE:115200
 STATUS:READY
 
 COMMANDS:
   F=Forward, T=Back, E=Left, D=Right, P=Stop
   E1=SlideLeft, D1=SlideRight, P1=SlideCenter
+  H<n>=HeadPosition (0-180 degrees)
+  TE=TrackLeft, TD=TrackRight (smart tracking)
 
 WAITING_COMMANDS...
 ```
@@ -224,6 +234,26 @@ WAITING_COMMANDS...
 | `D1` | Slide Direita | Move o servo para direita (120°) |
 | `P1` | Slide Centro | Centraliza o servo (90°) |
 
+### Comandos de Cabeça (Servo Motor)
+
+| Comando | Descrição | Ação |
+|---------|-----------|------|
+| `H0` | Cabeça Direita | Move o servo para 0° (olhando para direita) |
+| `H45` | Cabeça 45° Direita | Move o servo para 45° |
+| `H90` | Cabeça Centro | Centraliza o servo (90° - olhando para frente) |
+| `H135` | Cabeça 45° Esquerda | Move o servo para 135° |
+| `H180` | Cabeça Esquerda | Move o servo para 180° (olhando para esquerda) |
+| `H<n>` | Posição Personalizada | Move o servo para n° (0-180) |
+
+### Comandos de Rastreamento Inteligente
+
+Estes comandos executam manobras compostas para manter o robô alinhado com o usuário:
+
+| Comando | Descrição | Sequência de Ações |
+|---------|-----------|-------------------|
+| `TE` | Track Esquerda | 1. Vira esquerda (200ms) → 2. Avança (150ms) → 3. Para → 4. Centraliza cabeça |
+| `TD` | Track Direita | 1. Vira direita (200ms) → 2. Avança (150ms) → 3. Para → 4. Centraliza cabeça |
+
 ### Formato de Resposta
 
 ```
@@ -232,9 +262,11 @@ CMD:<comando>:OK
 
 Exemplo:
 ```
-CMD:F:OK       # Comando F recebido com sucesso
-CMD:P:OK       # Comando P recebido com sucesso
-CMD:X:INVALID  # Comando inválido
+CMD:F:OK        # Comando F recebido com sucesso
+CMD:P:OK        # Comando P recebido com sucesso
+CMD:H90:OK      # Comando H90 recebido com sucesso
+CMD:TE:OK       # Comando TE (track left) recebido com sucesso
+CMD:X:INVALID   # Comando inválido
 TIMEOUT:SAFETY_STOP  # Parada por timeout de segurança
 ```
 

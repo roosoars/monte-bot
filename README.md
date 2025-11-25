@@ -275,6 +275,9 @@ O sistema Monte Bot requer um Arduino conectado via USB ao Raspberry Pi para con
 | `E1` | Ajuste fino para esquerda (slide) |
 | `D1` | Ajuste fino para direita (slide) |
 | `P1` | Sem ajuste (slide centro) |
+| `H<n>` | Posição da cabeça (0-180 graus) |
+| `TE` | Rastreamento esquerda (vira + avança + recentra) |
+| `TD` | Rastreamento direita (vira + avança + recentra) |
 
 ### Conexões do Hardware
 
@@ -289,7 +292,7 @@ Consulte `arduino/README.md` para diagrama completo de conexões.
 - ENB → Jumper para +5V (velocidade fixa)
 - GND → GND comum
 
-**Servo Motor:**
+**Servo Motor (Cabeça):**
 - Pino 9 → Sinal do Servo
 - 5V → VCC do Servo
 - GND → GND do Servo

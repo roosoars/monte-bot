@@ -21,6 +21,16 @@
  *   D1 - Slide Direita      : Ajuste leve para direita (usado para correção de trajetória)
  *   P1 - Slide Centro       : Sem ajuste lateral
  * 
+ * Comandos de servo da cabeça (acionados pela detecção automática):
+ *   H0   - Servo cabeça para centro (90 graus - olhando para frente)
+ *   H45  - Servo cabeça 45 graus para esquerda
+ *   H135 - Servo cabeça 45 graus para direita
+ *   H<n> - Servo cabeça para posição n (0-180 graus, limitado a 0-90-180)
+ * 
+ * Comandos de rastreamento inteligente (turn + forward + recenter):
+ *   TE - Rastreamento esquerda: vira esquerda, avança um pouco, volta para frente
+ *   TD - Rastreamento direita: vira direita, avança um pouco, volta para frente
+ * 
  * CONEXÕES DO HARDWARE:
  * ---------------------
  * Driver L298N (ou compatível):
@@ -35,7 +45,7 @@
  *   - IN4 -> Pino 5 (RIGHT_IN2)
  *   - ENB -> Jumper para +5V (velocidade máxima fixa)
  * 
- * Servo Motor:
+ * Servo Motor (cabeça):
  *   - Sinal -> Pino 9
  *   - VCC -> 5V
  *   - GND -> GND
@@ -57,7 +67,7 @@
  * Pode ser alterado via variável de ambiente SERIAL_BAUDRATE no Raspberry Pi
  * 
  * @author Monte Bot Team - UFU
- * @version 1.1.0
+ * @version 1.2.0
  * @date 2024
  */
 
@@ -75,11 +85,17 @@
 #define RIGHT_IN1   4   // Direção 1 do motor direito
 #define RIGHT_IN2   5   // Direção 2 do motor direito
 
-// Servo Motor
+// Servo Motor (cabeça)
 #define SERVO_PIN        9    // Pino do servo motor
-#define SERVO_LEFT_POS   60   // Posição esquerda do servo (0-180 graus)
-#define SERVO_CENTER_POS 90   // Posição central do servo
-#define SERVO_RIGHT_POS  120  // Posição direita do servo
+#define SERVO_MIN_POS    0    // Posição mínima do servo (olhando para direita máxima)
+#define SERVO_LEFT_POS   60   // Posição esquerda do servo para slide
+#define SERVO_CENTER_POS 90   // Posição central do servo (olhando para frente)
+#define SERVO_RIGHT_POS  120  // Posição direita do servo para slide
+#define SERVO_MAX_POS    180  // Posição máxima do servo (olhando para esquerda máxima)
+
+// Tempos para manobras de rastreamento (em milissegundos)
+#define TRACK_TURN_TIME     200   // Tempo que fica virando (200ms)
+#define TRACK_FORWARD_TIME  150   // Tempo que anda para frente após virar (150ms)
 
 // LED de status
 #define STATUS_LED  LED_BUILTIN  // Pino 13 na maioria dos Arduinos
@@ -256,6 +272,59 @@ void noAdjustment() {
   servoMotor.write(servoPosition);
 }
 
+/**
+ * Move o servo da cabeça para uma posição específica
+ * @param pos Posição em graus (0-180, limitado entre SERVO_MIN_POS e SERVO_MAX_POS)
+ */
+void setHeadPosition(int pos) {
+  // Limita a posição entre os valores mínimo e máximo permitidos
+  if (pos < SERVO_MIN_POS) pos = SERVO_MIN_POS;
+  if (pos > SERVO_MAX_POS) pos = SERVO_MAX_POS;
+  
+  servoPosition = pos;
+  servoMotor.write(servoPosition);
+}
+
+/**
+ * Executa manobra de rastreamento para a esquerda
+ * Sequência: vira esquerda -> avança -> para -> centraliza servo
+ */
+void trackLeft() {
+  // 1. Vira para a esquerda
+  turnLeft();
+  delay(TRACK_TURN_TIME);
+  
+  // 2. Avança em frente
+  moveForward();
+  delay(TRACK_FORWARD_TIME);
+  
+  // 3. Para os motores
+  stopMotors();
+  
+  // 4. Centraliza o servo (cabeça olhando para frente)
+  setHeadPosition(SERVO_CENTER_POS);
+}
+
+/**
+ * Executa manobra de rastreamento para a direita
+ * Sequência: vira direita -> avança -> para -> centraliza servo
+ */
+void trackRight() {
+  // 1. Vira para a direita
+  turnRight();
+  delay(TRACK_TURN_TIME);
+  
+  // 2. Avança em frente
+  moveForward();
+  delay(TRACK_FORWARD_TIME);
+  
+  // 3. Para os motores
+  stopMotors();
+  
+  // 4. Centraliza o servo (cabeça olhando para frente)
+  setHeadPosition(SERVO_CENTER_POS);
+}
+
 // =============================================================================
 // PROCESSAMENTO DE COMANDOS
 // =============================================================================
@@ -307,6 +376,45 @@ void executeSlideCommand(String cmd) {
 }
 
 /**
+ * Executa o comando de servo da cabeça
+ * @param cmd String do comando (H0, H45, H90, H135, H180, etc.)
+ * @return true se comando válido, false caso contrário
+ */
+bool executeHeadCommand(String cmd) {
+  if (cmd.length() < 2 || cmd.charAt(0) != 'H') {
+    return false;
+  }
+  
+  // Extrai o valor numérico após o 'H'
+  String valueStr = cmd.substring(1);
+  int pos = valueStr.toInt();
+  
+  // Valida e executa
+  if (pos >= 0 && pos <= 180) {
+    setHeadPosition(pos);
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Executa o comando de rastreamento inteligente
+ * @param cmd String do comando (TE, TD)
+ * @return true se comando válido, false caso contrário
+ */
+bool executeTrackCommand(String cmd) {
+  if (cmd == "TE") {
+    trackLeft();
+    return true;
+  } else if (cmd == "TD") {
+    trackRight();
+    return true;
+  }
+  return false;
+}
+
+/**
  * Processa o comando recebido via Serial
  * @param command String do comando recebido
  */
@@ -327,12 +435,36 @@ void processCommand(String command) {
   // Log do comando recebido
   Serial.print("CMD:");
   Serial.print(command);
-  Serial.print(":OK");
+  Serial.print(":");
   
-  // Comandos de slide (2 caracteres)
-  if (command.length() == 2 && (command[1] == '1')) {
+  // Comandos de rastreamento inteligente (TE, TD) - 2 caracteres começando com T
+  if (command.length() == 2 && command.charAt(0) == 'T' && 
+      (command.charAt(1) == 'E' || command.charAt(1) == 'D')) {
+    if (executeTrackCommand(command)) {
+      Serial.println("OK");
+    } else {
+      Serial.println("INVALID");
+    }
+    digitalWrite(STATUS_LED, LOW);
+    return;
+  }
+  
+  // Comandos de servo da cabeça (H0, H45, H90, H135, H180, etc.)
+  if (command.length() >= 2 && command.charAt(0) == 'H') {
+    if (executeHeadCommand(command)) {
+      Serial.println("OK");
+    } else {
+      Serial.println("INVALID");
+    }
+    digitalWrite(STATUS_LED, LOW);
+    return;
+  }
+  
+  // Comandos de slide (2 caracteres terminando com 1)
+  if (command.length() == 2 && (command.charAt(1) == '1')) {
     executeSlideCommand(command);
-    Serial.println();
+    Serial.println("OK");
+    digitalWrite(STATUS_LED, LOW);
     return;
   }
   
@@ -345,14 +477,13 @@ void processCommand(String command) {
       lastCommand = currentCommand;
       currentCommand = cmd;
       executeMainCommand(cmd);
+      Serial.println("OK");
     } else {
-      Serial.print(":INVALID");
+      Serial.println("INVALID");
     }
   } else {
-    Serial.print(":UNKNOWN");
+    Serial.println("UNKNOWN");
   }
-  
-  Serial.println();
   
   // Apaga LED após processar
   digitalWrite(STATUS_LED, LOW);
@@ -443,18 +574,32 @@ void motorTest() {
   setRightMotor(true, false);
   delay(200);
   
-  // Teste servo motor
-  Serial.println("TEST:SERVO_LEFT");
+  // Teste servo motor - slide
+  Serial.println("TEST:SERVO_SLIDE_LEFT");
   servoMotor.write(SERVO_LEFT_POS);
   delay(500);
   Serial.println("TEST:SERVO_CENTER");
   servoMotor.write(SERVO_CENTER_POS);
   delay(500);
-  Serial.println("TEST:SERVO_RIGHT");
+  Serial.println("TEST:SERVO_SLIDE_RIGHT");
   servoMotor.write(SERVO_RIGHT_POS);
   delay(500);
   Serial.println("TEST:SERVO_CENTER");
   servoMotor.write(SERVO_CENTER_POS);
+  delay(500);
+  
+  // Teste servo motor - head tracking range (0-180 limited to safe range)
+  Serial.println("TEST:HEAD_MAX_RIGHT");
+  setHeadPosition(SERVO_MIN_POS);  // 0 degrees
+  delay(500);
+  Serial.println("TEST:HEAD_CENTER");
+  setHeadPosition(SERVO_CENTER_POS);  // 90 degrees
+  delay(500);
+  Serial.println("TEST:HEAD_MAX_LEFT");
+  setHeadPosition(SERVO_MAX_POS);  // 180 degrees
+  delay(500);
+  Serial.println("TEST:HEAD_CENTER");
+  setHeadPosition(SERVO_CENTER_POS);
   delay(200);
   
   Serial.println("MOTOR_TEST:COMPLETE");
@@ -488,17 +633,19 @@ void setup() {
   Serial.println("    MONTE BOT - Motor Controller");
   Serial.println("    Liga Academica MONTE BOT - UFU");
   Serial.println("========================================");
-  Serial.println("VERSION:1.1.0");
+  Serial.println("VERSION:1.2.0");
   Serial.println("BAUDRATE:115200");
   Serial.println("STATUS:READY");
   Serial.println("");
   Serial.println("PINS:");
   Serial.println("  Motors: 2,3,4,5 (ENA/ENB jumper to +5V)");
-  Serial.println("  Servo: 9");
+  Serial.println("  Servo: 9 (head movement)");
   Serial.println("");
   Serial.println("COMMANDS:");
   Serial.println("  F=Forward, T=Back, E=Left, D=Right, P=Stop");
   Serial.println("  E1=SlideLeft, D1=SlideRight, P1=SlideCenter");
+  Serial.println("  H<n>=HeadPosition (0-180 degrees)");
+  Serial.println("  TE=TrackLeft, TD=TrackRight (smart tracking)");
   Serial.println("");
   
   // Executar teste de motores (descomente para testar)
