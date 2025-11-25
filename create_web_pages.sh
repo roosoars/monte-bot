@@ -474,7 +474,23 @@ create_config_page() {
           updateStatus('HLS não suportado', 'error');
           return;
         }
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        // Ultra-low latency HLS configuration
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 0.5,           // Minimal back buffer for stability
+          maxBufferLength: 1,
+          maxMaxBufferLength: 2,
+          liveSyncDurationCount: 1,
+          liveMaxLatencyDurationCount: 2,
+          liveDurationInfinity: true,
+          highBufferWatchdogPeriod: 1,
+          nudgeOffset: 0.1,
+          maxFragLookUpTolerance: 0.1,
+          maxLoadingDelay: 1,
+          startFragPrefetch: true,
+          testBandwidth: false
+        });
         hls.loadSource(source);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
@@ -1181,6 +1197,25 @@ create_live_page() {
     let lostFrames = 0;
     const MIN_DISTANCE_AREA = 0.20;  // Stop at ~2m distance
     const MAX_DISTANCE_AREA = 0.30;  // Back up when too close
+    
+    // Smart tracking thresholds
+    const OFFSET_SLIGHT = 0.10;      // Slight offset - simple turn
+    const OFFSET_MEDIUM = 0.25;      // Medium offset - turn + forward
+    const OFFSET_EXTREME = 0.40;     // Extreme offset - head turn + track maneuver
+    
+    // Head servo positions (matching Arduino constants)
+    const HEAD_CENTER = 90;          // Center position (looking forward)
+    const HEAD_MAX_LEFT = 180;       // Maximum left (servo position 180)
+    const HEAD_MAX_RIGHT = 0;        // Maximum right (servo position 0)
+    const HEAD_RANGE = HEAD_MAX_LEFT - HEAD_MAX_RIGHT;  // Full servo range (180 degrees)
+    
+    // Sensitivity for medium offset head tracking (0.5 = less aggressive)
+    const MEDIUM_HEAD_SENSITIVITY = 0.5;
+    
+    // Tracking state
+    let lastHeadPosition = HEAD_CENTER;
+    let trackingCooldown = 0;        // Prevent rapid command spam
+    const TRACKING_COOLDOWN_MS = 300; // Min time between tracking maneuvers (300ms for faster response)
 
     const analysisCanvas = document.createElement('canvas');
     const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
@@ -1213,13 +1248,41 @@ create_live_page() {
           console.error('[MonteBot] HLS não suportado');
           return;
         }
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 10, maxBufferLength: 5 });
+        // Ultra-low latency HLS configuration
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 0.5,           // Minimal back buffer for stability           // No back buffer
+          maxBufferLength: 1,            // Minimal buffer (1 second max)
+          maxMaxBufferLength: 2,         // Hard limit on buffer
+          liveSyncDurationCount: 1,      // Sync to 1 segment behind live
+          liveMaxLatencyDurationCount: 2, // Max 2 segments latency
+          liveDurationInfinity: true,    // Infinite live duration
+          highBufferWatchdogPeriod: 1,   // Fast buffer checking
+          nudgeOffset: 0.1,              // Small nudge for sync
+          nudgeMaxRetry: 5,              // Retry sync quickly
+          maxFragLookUpTolerance: 0.1,   // Faster fragment lookup
+          maxLoadingDelay: 1,            // Max 1s loading delay
+          fragLoadingTimeOut: 4000,      // 4s fragment timeout
+          fragLoadingMaxRetry: 2,        // Quick retry
+          startFragPrefetch: true,       // Prefetch fragments
+          testBandwidth: false           // Skip bandwidth tests for speed
+        });
         hls.loadSource(source);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
           video.play().catch(() => {});
           ensureVideoSizing();
           initTracking();
+        });
+        // Auto-sync to live edge on stall
+        hls.on(Hls.Events.ERROR, function (event, data) {
+          if (data.details === 'bufferStalledError') {
+            console.log('[MonteBot] Buffer stalled, syncing to live edge');
+            if (hls.liveSyncPosition !== null && hls.liveSyncPosition !== undefined) {
+              video.currentTime = hls.liveSyncPosition;
+            }
+          }
         });
       };
       script.src = 'static/hls.min.js';
@@ -1497,8 +1560,41 @@ create_live_page() {
 
     let lastDetectionCmd = 'P';
 
+    /**
+     * Calculate head servo position based on user offset
+     * Maps offset (-0.5 to 0.5) to servo angle (0-180)
+     * Limits maximum rotation to 90 degrees from center
+     */
+    function calculateHeadPosition(offset) {
+      // Map offset to servo position
+      // offset = -0.5 (far left) -> servo = 180 (look left)
+      // offset = 0 (center) -> servo = 90 (look straight)
+      // offset = 0.5 (far right) -> servo = 0 (look right)
+      let pos = HEAD_CENTER - (offset * HEAD_RANGE);
+      
+      // Limit to valid range (0-180)
+      if (pos < HEAD_MAX_RIGHT) pos = HEAD_MAX_RIGHT;
+      if (pos > HEAD_MAX_LEFT) pos = HEAD_MAX_LEFT;
+      
+      return Math.round(pos);
+    }
+    
+    /**
+     * Send head servo command
+     */
+    function sendHeadCommand(position) {
+      if (position !== lastHeadPosition) {
+        lastHeadPosition = position;
+        sendCommand('H' + position);
+        console.log('[MonteBot] Head position:', position);
+      }
+    }
+
     function computeMovement(bbox) {
       let cmd = 'P';
+      let headCmd = null;
+      const now = Date.now();
+      
       if (!bbox) {
         if (cmd !== lastDetectionCmd) {
           lastDetectionCmd = cmd;
@@ -1506,34 +1602,98 @@ create_live_page() {
           localStorage.setItem('montebot_position', cmd);
           sendCommand(cmd);
         }
+        // Center head when no target
+        if (lastHeadPosition !== HEAD_CENTER) {
+          sendHeadCommand(HEAD_CENTER);
+        }
         return;
       }
+      
       const frameArea = Math.max(1, frameWidth * frameHeight);
       const centerX = bbox.originX + bbox.width / 2;
       const areaRatio = (bbox.width * bbox.height) / frameArea;
-      const offset = centerX / frameWidth - 0.5;
+      const offset = centerX / frameWidth - 0.5;  // -0.5 to 0.5 (left to right)
+      const absOffset = Math.abs(offset);
 
       // Too close - back up (T = Trás)
       if (areaRatio >= MAX_DISTANCE_AREA) {
         cmd = 'T';
+        // Center head when backing up
+        headCmd = HEAD_CENTER;
       }
       // Good distance - stop (P = Parado)
       else if (areaRatio >= MIN_DISTANCE_AREA) {
         cmd = 'P';
+        // Center head when at good distance
+        headCmd = HEAD_CENTER;
       }
-      // Person is to the right - turn right (D = Direita)
-      else if (offset > 0.10) {
-        cmd = 'D';
-      }
-      // Person is to the left - turn left (E = Esquerda)
-      else if (offset < -0.10) {
-        cmd = 'E';
+      // Person is significantly off-center - need to track
+      else if (absOffset > OFFSET_SLIGHT) {
+        
+        // EXTREME offset - person is very far to one side
+        // First move head to look at them, then do tracking maneuver
+        if (absOffset > OFFSET_EXTREME) {
+          // Calculate head position to look at user (max 90 degrees from center)
+          headCmd = calculateHeadPosition(offset);
+          
+          // Check cooldown for tracking maneuver
+          if (now - trackingCooldown > TRACKING_COOLDOWN_MS) {
+            // Send smart tracking command (TE or TD)
+            // This makes the robot: turn, advance, return to forward
+            if (offset < 0) {
+              cmd = 'TE';  // Track left
+            } else {
+              cmd = 'TD';  // Track right
+            }
+            trackingCooldown = now;
+          } else {
+            // During cooldown, just turn towards user
+            if (offset < 0) {
+              cmd = 'E';
+            } else {
+              cmd = 'D';
+            }
+          }
+        }
+        // MEDIUM offset - turn + forward to realign
+        else if (absOffset > OFFSET_MEDIUM) {
+          // Slight head movement to track user (less aggressive)
+          headCmd = calculateHeadPosition(offset * MEDIUM_HEAD_SENSITIVITY);
+          
+          // Check cooldown for tracking maneuver
+          if (now - trackingCooldown > TRACKING_COOLDOWN_MS) {
+            if (offset < 0) {
+              cmd = 'TE';  // Track left
+            } else {
+              cmd = 'TD';  // Track right  
+            }
+            trackingCooldown = now;
+          } else {
+            cmd = 'F';  // Move forward during cooldown
+          }
+        }
+        // SLIGHT offset - simple turn to align
+        else {
+          headCmd = HEAD_CENTER;  // Keep head centered
+          if (offset < 0) {
+            cmd = 'E';  // Turn left
+          } else {
+            cmd = 'D';  // Turn right
+          }
+        }
       }
       // Person is centered - go forward (F = Frente)
       else {
         cmd = 'F';
+        headCmd = HEAD_CENTER;  // Keep head centered when moving forward
       }
 
+      // Send head command if needed
+      if (headCmd !== null) {
+        sendHeadCommand(headCmd);
+      }
+
+      // Send movement command
       if (cmd !== lastDetectionCmd) {
         lastDetectionCmd = cmd;
         detectionStatus.textContent = cmd;
@@ -2173,7 +2333,7 @@ create_logs_page() {
 
   <div class="command-input-area">
     <div class="command-input-wrapper">
-      <input type="text" id="command-input" class="command-input" placeholder="Digite um comando para enviar ao Arduino (ex: F, T, E, D, P)..." />
+      <input type="text" id="command-input" class="command-input" placeholder="Digite um comando para enviar ao Arduino (ex: F, T, E, D, P, TE, TD, H90)..." />
       <button id="send-command">Enviar</button>
     </div>
     <div class="quick-commands">
@@ -2185,6 +2345,11 @@ create_logs_page() {
       <button class="quick-cmd" data-cmd="E1">E1 - Slide Esq</button>
       <button class="quick-cmd" data-cmd="D1">D1 - Slide Dir</button>
       <button class="quick-cmd" data-cmd="P1">P1 - Slide Centro</button>
+      <button class="quick-cmd left" data-cmd="TE">TE - Track Esq</button>
+      <button class="quick-cmd right" data-cmd="TD">TD - Track Dir</button>
+      <button class="quick-cmd" data-cmd="H0">H0 - Cabeça Dir</button>
+      <button class="quick-cmd" data-cmd="H90">H90 - Cabeça Centro</button>
+      <button class="quick-cmd" data-cmd="H180">H180 - Cabeça Esq</button>
     </div>
   </div>
 
