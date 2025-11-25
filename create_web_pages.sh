@@ -1001,6 +1001,29 @@ create_live_page() {
       transition: all 0.3s ease;
     }
     #back-button:hover { background: rgba(0, 198, 255, 0.2); transform: scale(1.05); }
+    #tracking-toggle {
+      position: absolute;
+      bottom: 100px;
+      left: 30px;
+      background: rgba(0, 100, 0, 0.7);
+      border: 2px solid rgba(0, 255, 0, 0.5);
+      color: #00ff00;
+      padding: 15px 25px;
+      border-radius: 25px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      pointer-events: all;
+      transition: all 0.3s ease;
+      min-width: 180px;
+      text-align: center;
+    }
+    #tracking-toggle:hover { transform: scale(1.05); }
+    #tracking-toggle.paused {
+      background: rgba(100, 50, 0, 0.7);
+      border-color: rgba(255, 165, 0, 0.5);
+      color: #ffaa00;
+    }
     @media (max-width: 768px) and (orientation: portrait) {
       body::before {
         content: "Por favor, gire o telefone para o modo horizontal";
@@ -1050,6 +1073,7 @@ create_live_page() {
     </div>
 
     <button id="back-button" onclick="window.location.href='/'">← Voltar</button>
+    <button id="tracking-toggle">🎯 Rastreamento ON</button>
   </div>
 
   <script type="module">
@@ -1063,7 +1087,11 @@ create_live_page() {
     const detectionStatus = document.getElementById('detection-status');
     const targetIndicator = document.getElementById('target-indicator');
     const serialIndicator = document.getElementById('serial-indicator');
+    const trackingToggle = document.getElementById('tracking-toggle');
     const source = 'stream/index.m3u8';
+
+    // Tracking pause state - when paused, only manual controls work
+    let trackingPaused = false;
 
     // WebSocket for serial communication
     let ws = null;
@@ -1591,6 +1619,11 @@ create_live_page() {
     }
 
     function computeMovement(bbox) {
+      // Skip automatic tracking if paused - only manual controls work
+      if (trackingPaused) {
+        return;
+      }
+
       let cmd = 'P';
       let headCmd = null;
       const now = Date.now();
@@ -1764,6 +1797,24 @@ create_live_page() {
 
     video.addEventListener('loadedmetadata', ensureVideoSizing);
     window.addEventListener('resize', ensureVideoSizing);
+
+    // Toggle button handler - pause/resume automatic tracking
+    trackingToggle.addEventListener('click', () => {
+      trackingPaused = !trackingPaused;
+      if (trackingPaused) {
+        trackingToggle.textContent = '⏸️ Rastreamento OFF';
+        trackingToggle.classList.add('paused');
+        // Show 'M' for Manual mode to distinguish from 'P' (auto-stopped)
+        // This indicates tracking is manually paused and won't auto-update
+        detectionStatus.textContent = 'M';
+        console.log('[MonteBot] Rastreamento pausado - modo manual ativo');
+      } else {
+        trackingToggle.textContent = '🎯 Rastreamento ON';
+        trackingToggle.classList.remove('paused');
+        console.log('[MonteBot] Rastreamento retomado');
+      }
+    });
+
     loadStream();
   </script>
 </body>
