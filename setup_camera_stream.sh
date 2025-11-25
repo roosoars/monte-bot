@@ -284,14 +284,20 @@ write_serial_bridge() {
   cat <<'SERIALEOF' >"${SERIAL_BRIDGE_SCRIPT}"
 #!/usr/bin/env python3
 """
-Monte Bot Serial Bridge - WebSocket to Serial communication.
+Monte Bot Serial Bridge - WebSocket to Serial communication with real-time logging.
 Receives commands from the web UI via WebSocket and sends them to Arduino via USB serial.
+Broadcasts all logs to connected clients for real-time monitoring.
 """
 import asyncio
 import serial
+import serial.tools.list_ports
 import logging
 import os
-from typing import Optional
+import json
+import time
+from datetime import datetime
+from typing import Optional, Set
+from collections import deque
 
 try:
     import websockets
@@ -299,91 +305,343 @@ except ImportError:
     print("[ERROR] websockets module not found. Install with: apt-get install python3-websockets")
     exit(1)
 
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(message)s')
 logger = logging.getLogger('montebot-serial')
 
 # Configuration
 WEBSOCKET_HOST = '0.0.0.0'
 WEBSOCKET_PORT = 8765
-SERIAL_PORT = os.environ.get('SERIAL_PORT', '/dev/ttyACM0')
+SERIAL_PORT = os.environ.get('SERIAL_PORT', '')  # Empty means auto-detect
 SERIAL_BAUDRATE = int(os.environ.get('SERIAL_BAUDRATE', '115200'))
+LOG_HISTORY_SIZE = 500  # Keep last 500 log entries
 
-# Global serial connection
+# Global state
 ser: Optional[serial.Serial] = None
+connected_clients: Set = set()
+log_history: deque = deque(maxlen=LOG_HISTORY_SIZE)
+serial_status = {"connected": False, "port": None, "last_error": None}
+command_stats = {"sent": 0, "failed": 0, "last_command": None, "last_time": None}
 
-def init_serial() -> Optional[serial.Serial]:
-    """Initialize serial connection to Arduino."""
-    global ser
-    default_ports = ['/dev/ttyACM0', '/dev/ttyUSB0', '/dev/ttyAMA0']
-    # Use configured port first, then try defaults (avoiding duplicates)
-    ports_to_try = [SERIAL_PORT] + [p for p in default_ports if p != SERIAL_PORT]
+def create_log_entry(level: str, source: str, message: str, data: dict = None) -> dict:
+    """Create a structured log entry."""
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "time_ms": int(time.time() * 1000),
+        "level": level,
+        "source": source,
+        "message": message,
+        "data": data or {}
+    }
+    log_history.append(entry)
+    return entry
+
+async def broadcast_log(entry: dict):
+    """Broadcast a log entry to all connected clients."""
+    if not connected_clients:
+        return
+    message = json.dumps({"type": "log", "entry": entry})
+    disconnected = set()
+    for client in connected_clients:
+        try:
+            await client.send(message)
+        except websockets.exceptions.ConnectionClosed:
+            disconnected.add(client)
+        except Exception as e:
+            logger.warning(f"Failed to send to client: {e}")
+            disconnected.add(client)
+    connected_clients.difference_update(disconnected)
+
+async def log_and_broadcast(level: str, source: str, message: str, data: dict = None):
+    """Log a message and broadcast to clients."""
+    # Log locally
+    log_func = getattr(logger, level.lower(), logger.info)
+    log_func(f"[{source}] {message}")
+    
+    # Create entry and broadcast
+    entry = create_log_entry(level, source, message, data)
+    await broadcast_log(entry)
+
+def find_usb_ports() -> list:
+    """Find all available USB serial ports."""
+    ports = []
+    
+    # Method 1: Use pyserial's list_ports
+    try:
+        for port in serial.tools.list_ports.comports():
+            ports.append({
+                "device": port.device,
+                "description": port.description,
+                "hwid": port.hwid,
+                "vid": port.vid,
+                "pid": port.pid
+            })
+    except Exception as e:
+        logger.warning(f"Failed to list ports via pyserial: {e}")
+    
+    # Method 2: Check common device paths
+    common_ports = [
+        '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3',
+        '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2', '/dev/ttyACM3',
+        '/dev/ttyAMA0', '/dev/ttyAMA1',
+        '/dev/serial0', '/dev/serial1'
+    ]
+    
+    existing_devices = set(p["device"] for p in ports)
+    for port_path in common_ports:
+        if port_path not in existing_devices and os.path.exists(port_path):
+            ports.append({
+                "device": port_path,
+                "description": "Found via filesystem",
+                "hwid": None,
+                "vid": None,
+                "pid": None
+            })
+    
+    return ports
+
+async def init_serial() -> Optional[serial.Serial]:
+    """Initialize serial connection to Arduino with auto-detection."""
+    global ser, serial_status
+    
+    # Close existing connection if any
+    if ser and ser.is_open:
+        try:
+            ser.close()
+        except Exception:
+            pass
+        ser = None
+    
+    # Find available ports
+    available_ports = find_usb_ports()
+    await log_and_broadcast("INFO", "SERIAL", f"Found {len(available_ports)} USB ports", 
+                           {"ports": [p["device"] for p in available_ports]})
+    
+    for port_info in available_ports:
+        await log_and_broadcast("DEBUG", "SERIAL", f"Port details: {port_info['device']}", port_info)
+    
+    # Determine which ports to try
+    if SERIAL_PORT:
+        ports_to_try = [SERIAL_PORT]
+        await log_and_broadcast("INFO", "SERIAL", f"Using configured port: {SERIAL_PORT}")
+    else:
+        # Prioritize Arduino-like devices (ACM first, then USB)
+        ports_to_try = sorted([p["device"] for p in available_ports], 
+                             key=lambda x: (0 if 'ACM' in x else 1 if 'USB' in x else 2))
+        await log_and_broadcast("INFO", "SERIAL", f"Auto-detecting port from: {ports_to_try}")
     
     for port in ports_to_try:
         try:
+            await log_and_broadcast("INFO", "SERIAL", f"Trying to connect to {port} at {SERIAL_BAUDRATE} baud...")
             ser = serial.Serial(port, SERIAL_BAUDRATE, timeout=1)
-            logger.info(f"Connected to serial port: {port}")
+            
+            # Wait a bit for Arduino to reset
+            await asyncio.sleep(2)
+            
+            # Flush any garbage
+            ser.reset_input_buffer()
+            ser.reset_output_buffer()
+            
+            serial_status = {"connected": True, "port": port, "last_error": None}
+            await log_and_broadcast("INFO", "SERIAL", f"✅ Connected to serial port: {port}", 
+                                   {"port": port, "baudrate": SERIAL_BAUDRATE})
             return ser
+            
         except (serial.SerialException, OSError) as e:
-            logger.warning(f"Could not open {port}: {e}")
+            error_msg = str(e)
+            await log_and_broadcast("WARNING", "SERIAL", f"❌ Could not open {port}: {error_msg}")
+            serial_status = {"connected": False, "port": None, "last_error": error_msg}
     
-    logger.error("No serial port available. Commands will be logged only.")
+    await log_and_broadcast("ERROR", "SERIAL", "No serial port available. Commands will be logged only.")
     return None
 
-def send_command(cmd: str) -> bool:
+async def send_command(cmd: str, websocket=None) -> bool:
     """Send command to Arduino via serial."""
-    global ser
+    global ser, command_stats
     
     # Clean the command
     cmd = cmd.strip()
     if not cmd:
         return False
     
+    command_stats["last_command"] = cmd
+    command_stats["last_time"] = datetime.now().isoformat()
+    
     # Log the command
-    logger.info(f"[COMMAND] {cmd}")
+    await log_and_broadcast("INFO", "COMMAND", f"📤 Sending: {cmd}", 
+                           {"command": cmd, "serial_connected": ser is not None and ser.is_open})
     
     # Send via serial if available
     if ser and ser.is_open:
         try:
-            ser.write(f"{cmd}\n".encode())
+            data = f"{cmd}\n".encode()
+            bytes_written = ser.write(data)
             ser.flush()
+            command_stats["sent"] += 1
+            await log_and_broadcast("DEBUG", "SERIAL", f"✅ Wrote {bytes_written} bytes to serial", 
+                                   {"command": cmd, "bytes": bytes_written})
+            
+            # Try to read response (non-blocking)
+            await asyncio.sleep(0.05)  # Small delay for response
+            if ser.in_waiting > 0:
+                response = ser.read(ser.in_waiting).decode('utf-8', errors='replace').strip()
+                if response:
+                    await log_and_broadcast("INFO", "SERIAL", f"📥 Arduino response: {response}", 
+                                           {"response": response})
+            
             return True
         except serial.SerialException as e:
-            logger.error(f"Serial write error: {e}")
+            error_msg = str(e)
+            command_stats["failed"] += 1
+            await log_and_broadcast("ERROR", "SERIAL", f"❌ Serial write error: {error_msg}")
             # Try to reconnect
-            init_serial()
+            await init_serial()
             return False
-    
-    return False
+    else:
+        command_stats["failed"] += 1
+        await log_and_broadcast("WARNING", "COMMAND", f"⚠️ No serial connection - command logged only: {cmd}")
+        return False
+
+async def read_serial_data():
+    """Background task to read data from serial port."""
+    global ser
+    while True:
+        try:
+            if ser and ser.is_open and ser.in_waiting > 0:
+                data = ser.read(ser.in_waiting).decode('utf-8', errors='replace').strip()
+                if data:
+                    for line in data.split('\n'):
+                        line = line.strip()
+                        if line:
+                            await log_and_broadcast("INFO", "ARDUINO", f"📥 {line}", {"raw": line})
+        except serial.SerialException as e:
+            await log_and_broadcast("ERROR", "SERIAL", f"Serial read error: {e}")
+            await init_serial()
+        except Exception as e:
+            await log_and_broadcast("ERROR", "SERIAL", f"Unexpected error reading serial: {e}")
+        
+        await asyncio.sleep(0.1)  # Check every 100ms
 
 async def handle_connection(websocket):
     """Handle incoming WebSocket connections."""
     client_addr = websocket.remote_address
-    logger.info(f"Client connected: {client_addr}")
+    connected_clients.add(websocket)
+    
+    await log_and_broadcast("INFO", "WEBSOCKET", f"🔌 Client connected: {client_addr}", 
+                           {"address": str(client_addr), "total_clients": len(connected_clients)})
+    
+    # Send current status to new client
+    status_msg = json.dumps({
+        "type": "status",
+        "serial": serial_status,
+        "stats": command_stats,
+        "clients": len(connected_clients)
+    })
+    await websocket.send(status_msg)
+    
+    # Send log history
+    history_msg = json.dumps({
+        "type": "history",
+        "entries": list(log_history)
+    })
+    await websocket.send(history_msg)
     
     try:
         async for message in websocket:
-            # Parse the message - expecting command like "F", "T", "E", "D", "P", "E1", "D1", "P1"
-            cmd = message.strip()
-            if cmd:
-                send_command(cmd)
-                # Echo back confirmation
-                await websocket.send(f"OK:{cmd}")
+            try:
+                # Try to parse as JSON first
+                try:
+                    data = json.loads(message)
+                    msg_type = data.get("type", "command")
+                    
+                    if msg_type == "command":
+                        cmd = data.get("cmd", data.get("command", "")).strip()
+                    elif msg_type == "ping":
+                        await websocket.send(json.dumps({"type": "pong", "time": time.time()}))
+                        continue
+                    elif msg_type == "status":
+                        status_msg = json.dumps({
+                            "type": "status",
+                            "serial": serial_status,
+                            "stats": command_stats,
+                            "clients": len(connected_clients)
+                        })
+                        await websocket.send(status_msg)
+                        continue
+                    elif msg_type == "reconnect_serial":
+                        await log_and_broadcast("INFO", "SERIAL", "🔄 Manual serial reconnection requested")
+                        await init_serial()
+                        continue
+                    else:
+                        cmd = ""
+                except json.JSONDecodeError:
+                    # Treat as plain command
+                    cmd = message.strip()
+                
+                if cmd:
+                    success = await send_command(cmd, websocket)
+                    # Echo back confirmation
+                    response = json.dumps({
+                        "type": "command_result",
+                        "command": cmd,
+                        "success": success,
+                        "serial_connected": serial_status["connected"]
+                    })
+                    await websocket.send(response)
+                    
+            except Exception as e:
+                await log_and_broadcast("ERROR", "WEBSOCKET", f"Error processing message: {e}")
+                
     except websockets.exceptions.ConnectionClosed:
-        logger.info(f"Client disconnected: {client_addr}")
+        pass
     except Exception as e:
-        logger.error(f"Error handling client {client_addr}: {e}")
+        await log_and_broadcast("ERROR", "WEBSOCKET", f"Error handling client {client_addr}: {e}")
+    finally:
+        connected_clients.discard(websocket)
+        await log_and_broadcast("INFO", "WEBSOCKET", f"🔌 Client disconnected: {client_addr}", 
+                               {"total_clients": len(connected_clients)})
+
+async def periodic_status():
+    """Periodically check and broadcast status."""
+    global ser
+    while True:
+        await asyncio.sleep(10)  # Every 10 seconds
+        
+        # Check serial connection
+        if ser:
+            try:
+                if not ser.is_open:
+                    await log_and_broadcast("WARNING", "SERIAL", "Serial port closed unexpectedly, reconnecting...")
+                    await init_serial()
+            except Exception:
+                await log_and_broadcast("WARNING", "SERIAL", "Serial connection lost, reconnecting...")
+                await init_serial()
+        else:
+            # Try to reconnect if we don't have a connection
+            await log_and_broadcast("DEBUG", "SERIAL", "Attempting to find serial port...")
+            await init_serial()
 
 async def main():
     """Main entry point."""
-    logger.info("Monte Bot Serial Bridge starting...")
+    await log_and_broadcast("INFO", "SYSTEM", "🚀 Monte Bot Serial Bridge starting...")
+    await log_and_broadcast("INFO", "SYSTEM", f"WebSocket port: {WEBSOCKET_PORT}, Serial baudrate: {SERIAL_BAUDRATE}")
+    
+    # List USB devices
+    ports = find_usb_ports()
+    if ports:
+        await log_and_broadcast("INFO", "SYSTEM", f"Available USB devices: {[p['device'] for p in ports]}")
+    else:
+        await log_and_broadcast("WARNING", "SYSTEM", "No USB serial devices found")
     
     # Initialize serial
-    init_serial()
+    await init_serial()
     
     # Start WebSocket server
-    logger.info(f"WebSocket server listening on ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
+    await log_and_broadcast("INFO", "WEBSOCKET", f"WebSocket server listening on ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
     
     async with websockets.serve(handle_connection, WEBSOCKET_HOST, WEBSOCKET_PORT):
+        # Start background tasks
+        asyncio.create_task(read_serial_data())
+        asyncio.create_task(periodic_status())
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":

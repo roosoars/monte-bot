@@ -201,7 +201,7 @@ O sistema agora inclui páginas web para controle do robô:
 
 1. **Página de configuração** (`/index.html`)
    - Menu principal com acesso às funcionalidades do sistema
-   - Acesso rápido ao modo Live, Configurações, Posição e Calibração
+   - Acesso rápido ao modo Live, Configurações, Posição, Logs e Calibração
    - Exibe informações de rede e IP do robô
 
 2. **Página Live** (`/live.html`)
@@ -214,6 +214,7 @@ O sistema agora inclui páginas web para controle do robô:
    - Lógica de parada automática quando a pessoa está a aproximadamente 2 metros (área maior que 20% do quadro)
    - Lógica de recuo quando a pessoa está muito próxima (área maior que 30% do quadro)
    - Overlays visuais mostrando a caixa delimitadora da pessoa detectada
+   - Status de conexão WebSocket e Serial em tempo real
 
 3. **Página de Posição** (`/position.html`)
    - Exibe em tempo real o comando de direção para os motores
@@ -221,6 +222,26 @@ O sistema agora inclui páginas web para controle do robô:
    - Ideal para integração com sistema de controle de motores
    - Lê dados do localStorage compartilhado com a página Live
    - Pode ser acessada em dispositivo separado para enviar comandos aos motores
+
+4. **Página de Logs em Tempo Real** (`/logs.html`)
+   - Monitoramento em tempo real de todas as comunicações do sistema
+   - Exibe logs do WebSocket, Serial/USB, comandos enviados e respostas do Arduino
+   - Filtros por fonte (WebSocket, Serial, Comandos, Arduino, Sistema) e nível (DEBUG, INFO, WARNING, ERROR)
+   - Busca textual nos logs
+   - Estatísticas de comandos enviados/falhos e porta serial conectada
+   - Envio manual de comandos para teste e debug
+   - Botões de comando rápido (F, T, E, D, P, E1, D1, P1)
+   - Auto-scroll com indicador de novos logs
+   - Reconexão automática de WebSocket e Serial
+
+### Comunicação Serial Aprimorada
+
+O sistema agora inclui um serviço de bridge serial (`montebot-serial.service`) que:
+- **Auto-detecta portas USB**: Busca automaticamente em `/dev/ttyACM*`, `/dev/ttyUSB*`, `/dev/ttyAMA*` e `/dev/serial*`
+- **Broadcast de logs**: Envia todos os eventos para clientes WebSocket em tempo real
+- **Reconexão automática**: Tenta reconectar automaticamente se a conexão serial for perdida
+- **Histórico de logs**: Mantém os últimos 500 eventos para novos clientes
+- **Leitura de respostas**: Captura e exibe respostas do Arduino
 
 ### Melhorias no startup do hotspot
 
