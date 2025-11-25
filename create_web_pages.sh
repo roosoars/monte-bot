@@ -169,25 +169,11 @@ create_index_page() {
         <span class="menu-item-icon">▶</span>
       </a>
 
-      <a href="/position.html" class="menu-item">
-        <div class="menu-item-content">
-          <div class="menu-item-title">Posição</div>
-          <div class="menu-item-desc">Comandos em tempo real para motores (P, F, E, D, T)</div>
-        </div>
-        <span class="menu-item-icon">📡</span>
-      </a>
 
-      <div class="menu-item" onclick="alert('Calibração em desenvolvimento')">
-        <div class="menu-item-content">
-          <div class="menu-item-title">Calibração</div>
-          <div class="menu-item-desc">Calibrar sensores e motores</div>
-        </div>
-        <span class="menu-item-icon">🎯</span>
-      </div>
     </nav>
 
     <div class="info-box">
-      <p><strong>Dica:</strong> Configure o alvo, use "Live" para rastrear e "Posição" para comandos de motor.</p>
+      <p><strong>Dica:</strong> Configure o alvo e use "Live" para rastrear.</p>
       <p><strong>Rede:</strong> Conectado ao hotspot MonteHotspot</p>
       <p><strong>IP:</strong> 192.168.50.1</p>
       <div id="target-status" class="target-status no-target">
@@ -959,6 +945,23 @@ create_live_page() {
       background: rgba(100, 50, 0, 0.7);
       border-color: rgba(255, 165, 0, 0.5);
     }
+    #serial-indicator {
+      position: absolute;
+      top: 130px;
+      left: 20px;
+      background: rgba(100, 0, 0, 0.7);
+      padding: 8px 15px;
+      border-radius: 10px;
+      font-size: 0.8rem;
+      color: #ff8888;
+      pointer-events: none;
+      border: 1px solid rgba(255, 0, 0, 0.5);
+    }
+    #serial-indicator.connected {
+      background: rgba(0, 100, 0, 0.7);
+      border-color: rgba(0, 255, 0, 0.5);
+      color: #88ff88;
+    }
     #back-button {
       position: absolute;
       bottom: 30px;
@@ -1002,13 +1005,14 @@ create_live_page() {
   <div id="controls-overlay">
     <div id="detection-status">P</div>
     <div id="target-indicator" class="no-target">⚠️ Sem alvo</div>
+    <div id="serial-indicator" class="disconnected">🔴 Serial</div>
 
     <div id="slide-control">
       <div class="slide-container">
         <div class="slide-bar"></div>
         <div class="slide-handle" id="slideHandle"></div>
       </div>
-      <div id="slide-status">P</div>
+      <div id="slide-status">P1</div>
     </div>
 
     <div id="joystick-control">
@@ -1035,7 +1039,66 @@ create_live_page() {
     const joystickStatus = document.getElementById('joystick-status');
     const detectionStatus = document.getElementById('detection-status');
     const targetIndicator = document.getElementById('target-indicator');
+    const serialIndicator = document.getElementById('serial-indicator');
     const source = 'stream/index.m3u8';
+
+    // WebSocket for serial communication
+    let ws = null;
+    let wsReconnectTimer = null;
+    const WS_URL = 'ws://' + window.location.hostname + ':8765';
+
+    function updateSerialStatus(connected) {
+      if (connected) {
+        serialIndicator.textContent = '🟢 Serial';
+        serialIndicator.className = 'connected';
+      } else {
+        serialIndicator.textContent = '🔴 Serial';
+        serialIndicator.className = 'disconnected';
+      }
+    }
+
+    function connectWebSocket() {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      
+      try {
+        ws = new WebSocket(WS_URL);
+        ws.onopen = () => {
+          console.log('[MonteBot] WebSocket conectado');
+          updateSerialStatus(true);
+          if (wsReconnectTimer) {
+            clearTimeout(wsReconnectTimer);
+            wsReconnectTimer = null;
+          }
+        };
+        ws.onclose = () => {
+          console.log('[MonteBot] WebSocket desconectado, tentando reconectar...');
+          updateSerialStatus(false);
+          ws = null;
+          wsReconnectTimer = setTimeout(connectWebSocket, 3000);
+        };
+        ws.onerror = (e) => {
+          console.warn('[MonteBot] WebSocket erro:', e);
+          updateSerialStatus(false);
+        };
+        ws.onmessage = (e) => {
+          console.log('[MonteBot] Serial response:', e.data);
+        };
+      } catch (e) {
+        console.warn('[MonteBot] Falha ao conectar WebSocket:', e);
+        updateSerialStatus(false);
+        wsReconnectTimer = setTimeout(connectWebSocket, 3000);
+      }
+    }
+
+    function sendCommand(cmd) {
+      console.log('[MonteBot] ' + cmd);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(cmd);
+      }
+    }
+
+    // Initialize WebSocket connection
+    connectWebSocket();
 
     // Load saved target profile
     let savedTarget = null;
@@ -1105,6 +1168,7 @@ create_live_page() {
 
     // SLIDE CONTROL
     let isDraggingSlide = false;
+    let lastSlideCmd = 'P1';
 
     function updateSlidePosition(clientX) {
       const container = slideHandle.parentElement;
@@ -1116,15 +1180,19 @@ create_live_page() {
       offset = Math.max(-maxOffset, Math.min(maxOffset, offset));
       slideHandle.style.left = `calc(50% + ${offset}px)`;
 
+      let cmd;
       if (offset > 30) {
-        slideStatus.textContent = 'D';
-        console.log('[MonteBot] D');
+        cmd = 'D1';
       } else if (offset < -30) {
-        slideStatus.textContent = 'E';
-        console.log('[MonteBot] E');
+        cmd = 'E1';
       } else {
-        slideStatus.textContent = 'P';
-        console.log('[MonteBot] P');
+        cmd = 'P1';
+      }
+      
+      if (cmd !== lastSlideCmd) {
+        lastSlideCmd = cmd;
+        slideStatus.textContent = cmd;
+        sendCommand(cmd);
       }
     }
 
@@ -1136,21 +1204,28 @@ create_live_page() {
       if (isDraggingSlide) {
         isDraggingSlide = false;
         slideHandle.style.left = '50%';
-        slideStatus.textContent = 'P';
-        console.log('[MonteBot] P');
+        slideStatus.textContent = 'P1';
+        if (lastSlideCmd !== 'P1') {
+          lastSlideCmd = 'P1';
+          sendCommand('P1');
+        }
       }
     });
     document.addEventListener('touchend', () => {
       if (isDraggingSlide) {
         isDraggingSlide = false;
         slideHandle.style.left = '50%';
-        slideStatus.textContent = 'P';
-        console.log('[MonteBot] P');
+        slideStatus.textContent = 'P1';
+        if (lastSlideCmd !== 'P1') {
+          lastSlideCmd = 'P1';
+          sendCommand('P1');
+        }
       }
     });
 
     // JOYSTICK CONTROL
     let isDraggingJoystick = false;
+    let lastJoystickCmd = 'P';
 
     function updateJoystickPosition(clientX, clientY) {
       const container = joystickHandle.parentElement;
@@ -1168,27 +1243,26 @@ create_live_page() {
       joystickHandle.style.left = `calc(50% + ${offsetX}px)`;
       joystickHandle.style.top = `calc(50% + ${offsetY}px)`;
 
+      let cmd = 'P';
       const threshold = 20;
       if (Math.abs(offsetY) > Math.abs(offsetX)) {
         if (offsetY < -threshold) {
-          joystickStatus.textContent = 'F';
-          console.log('[MonteBot] F');
+          cmd = 'F';
         } else if (offsetY > threshold) {
-          joystickStatus.textContent = 'A';
-          console.log('[MonteBot] A');
-        } else {
-          joystickStatus.textContent = 'P';
+          cmd = 'T';
         }
       } else {
         if (offsetX > threshold) {
-          joystickStatus.textContent = 'D';
-          console.log('[MonteBot] D');
+          cmd = 'D';
         } else if (offsetX < -threshold) {
-          joystickStatus.textContent = 'E';
-          console.log('[MonteBot] E');
-        } else {
-          joystickStatus.textContent = 'P';
+          cmd = 'E';
         }
+      }
+      
+      if (cmd !== lastJoystickCmd) {
+        lastJoystickCmd = cmd;
+        joystickStatus.textContent = cmd;
+        sendCommand(cmd);
       }
     }
 
@@ -1202,6 +1276,10 @@ create_live_page() {
         joystickHandle.style.left = '50%';
         joystickHandle.style.top = '50%';
         joystickStatus.textContent = 'P';
+        if (lastJoystickCmd !== 'P') {
+          lastJoystickCmd = 'P';
+          sendCommand('P');
+        }
       }
     });
     document.addEventListener('touchend', () => {
@@ -1210,6 +1288,10 @@ create_live_page() {
         joystickHandle.style.left = '50%';
         joystickHandle.style.top = '50%';
         joystickStatus.textContent = 'P';
+        if (lastJoystickCmd !== 'P') {
+          lastJoystickCmd = 'P';
+          sendCommand('P');
+        }
       }
     });
 
@@ -1353,12 +1435,17 @@ create_live_page() {
       return bestDetection ? { detection: bestDetection, isTarget: bestScore < 0.4 } : null;
     }
 
+    let lastDetectionCmd = 'P';
+
     function computeMovement(bbox) {
       let cmd = 'P';
       if (!bbox) {
-        detectionStatus.textContent = cmd;
-        localStorage.setItem('montebot_position', cmd);
-        console.log('[MonteBot] ' + cmd);
+        if (cmd !== lastDetectionCmd) {
+          lastDetectionCmd = cmd;
+          detectionStatus.textContent = cmd;
+          localStorage.setItem('montebot_position', cmd);
+          sendCommand(cmd);
+        }
         return;
       }
       const frameArea = Math.max(1, frameWidth * frameHeight);
@@ -1387,9 +1474,12 @@ create_live_page() {
         cmd = 'F';
       }
 
-      detectionStatus.textContent = cmd;
-      localStorage.setItem('montebot_position', cmd);
-      console.log('[MonteBot] ' + cmd);
+      if (cmd !== lastDetectionCmd) {
+        lastDetectionCmd = cmd;
+        detectionStatus.textContent = cmd;
+        localStorage.setItem('montebot_position', cmd);
+        sendCommand(cmd);
+      }
     }
 
     function processFrame() {
@@ -1410,9 +1500,12 @@ create_live_page() {
         lostFrames++;
         if (lostFrames > 30) {
           overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-          detectionStatus.textContent = 'P';
-          localStorage.setItem('montebot_position', 'P');
-          console.log('[MonteBot] P');
+          if (lastDetectionCmd !== 'P') {
+            lastDetectionCmd = 'P';
+            detectionStatus.textContent = 'P';
+            localStorage.setItem('montebot_position', 'P');
+            sendCommand('P');
+          }
         }
         animationFrameId = requestAnimationFrame(processFrame);
         return;
@@ -1422,9 +1515,12 @@ create_live_page() {
       const selection = chooseDetection(result.detections);
       if (!selection) {
         overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-        detectionStatus.textContent = 'P';
-        localStorage.setItem('montebot_position', 'P');
-        console.log('[MonteBot] P');
+        if (lastDetectionCmd !== 'P') {
+          lastDetectionCmd = 'P';
+          detectionStatus.textContent = 'P';
+          localStorage.setItem('montebot_position', 'P');
+          sendCommand('P');
+        }
         animationFrameId = requestAnimationFrame(processFrame);
         return;
       }

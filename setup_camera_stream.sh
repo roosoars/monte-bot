@@ -65,7 +65,7 @@ check_operating_system() {
 install_camera_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends rpicam-apps ffmpeg curl
+  apt-get install -y --no-install-recommends rpicam-apps ffmpeg curl python3 python3-serial python3-websockets
 }
 
 detect_boot_config() {
@@ -201,6 +201,150 @@ Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+SERIAL_BRIDGE_SCRIPT="/usr/local/sbin/montebot-serial-bridge.py"
+SERIAL_SERVICE_FILE="/etc/systemd/system/montebot-serial.service"
+
+write_serial_bridge() {
+  cat <<'SERIALEOF' >"${SERIAL_BRIDGE_SCRIPT}"
+#!/usr/bin/env python3
+"""
+Monte Bot Serial Bridge - WebSocket to Serial communication.
+Receives commands from the web UI via WebSocket and sends them to Arduino via USB serial.
+"""
+import asyncio
+import serial
+import logging
+import os
+from typing import Optional
+
+try:
+    import websockets
+except ImportError:
+    print("[ERROR] websockets module not found. Install with: apt-get install python3-websockets")
+    exit(1)
+
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logger = logging.getLogger('montebot-serial')
+
+# Configuration
+WEBSOCKET_HOST = '0.0.0.0'
+WEBSOCKET_PORT = 8765
+SERIAL_PORT = os.environ.get('SERIAL_PORT', '/dev/ttyACM0')
+SERIAL_BAUDRATE = int(os.environ.get('SERIAL_BAUDRATE', '115200'))
+
+# Global serial connection
+ser: Optional[serial.Serial] = None
+
+def init_serial() -> Optional[serial.Serial]:
+    """Initialize serial connection to Arduino."""
+    global ser
+    default_ports = ['/dev/ttyACM0', '/dev/ttyUSB0', '/dev/ttyAMA0']
+    # Use configured port first, then try defaults (avoiding duplicates)
+    ports_to_try = [SERIAL_PORT] + [p for p in default_ports if p != SERIAL_PORT]
+    
+    for port in ports_to_try:
+        try:
+            ser = serial.Serial(port, SERIAL_BAUDRATE, timeout=1)
+            logger.info(f"Connected to serial port: {port}")
+            return ser
+        except (serial.SerialException, OSError) as e:
+            logger.warning(f"Could not open {port}: {e}")
+    
+    logger.error("No serial port available. Commands will be logged only.")
+    return None
+
+def send_command(cmd: str) -> bool:
+    """Send command to Arduino via serial."""
+    global ser
+    
+    # Clean the command
+    cmd = cmd.strip()
+    if not cmd:
+        return False
+    
+    # Log the command
+    logger.info(f"[COMMAND] {cmd}")
+    
+    # Send via serial if available
+    if ser and ser.is_open:
+        try:
+            ser.write(f"{cmd}\n".encode())
+            ser.flush()
+            return True
+        except serial.SerialException as e:
+            logger.error(f"Serial write error: {e}")
+            # Try to reconnect
+            init_serial()
+            return False
+    
+    return False
+
+async def handle_connection(websocket):
+    """Handle incoming WebSocket connections."""
+    client_addr = websocket.remote_address
+    logger.info(f"Client connected: {client_addr}")
+    
+    try:
+        async for message in websocket:
+            # Parse the message - expecting command like "F", "T", "E", "D", "P", "E1", "D1", "P1"
+            cmd = message.strip()
+            if cmd:
+                send_command(cmd)
+                # Echo back confirmation
+                await websocket.send(f"OK:{cmd}")
+    except websockets.exceptions.ConnectionClosed:
+        logger.info(f"Client disconnected: {client_addr}")
+    except Exception as e:
+        logger.error(f"Error handling client {client_addr}: {e}")
+
+async def main():
+    """Main entry point."""
+    logger.info("Monte Bot Serial Bridge starting...")
+    
+    # Initialize serial
+    init_serial()
+    
+    # Start WebSocket server
+    logger.info(f"WebSocket server listening on ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
+    
+    async with websockets.serve(handle_connection, WEBSOCKET_HOST, WEBSOCKET_PORT):
+        await asyncio.Future()  # Run forever
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+    finally:
+        if ser and ser.is_open:
+            ser.close()
+SERIALEOF
+  chmod 755 "${SERIAL_BRIDGE_SCRIPT}"
+}
+
+write_serial_service() {
+  cat <<EOF >"${SERIAL_SERVICE_FILE}"
+[Unit]
+Description=Monte Bot Serial Bridge (WebSocket to Arduino)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${SERIAL_BRIDGE_SCRIPT}
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+User=root
+Group=dialout
+Environment=SERIAL_PORT=/dev/ttyACM0
+Environment=SERIAL_BAUDRATE=115200
 
 [Install]
 WantedBy=multi-user.target
@@ -959,6 +1103,7 @@ EOF
 reload_services() {
   systemctl daemon-reload
   systemctl enable --now rpicam-hls.service
+  systemctl enable --now montebot-serial.service
   systemctl restart nginx
 }
 
@@ -972,6 +1117,8 @@ main() {
   download_mediapipe_assets
   write_camera_runner
   write_systemd_service
+  write_serial_bridge
+  write_serial_service
   update_web_page
   reload_services
   echo "[INFO] Configuração da câmera concluída. Reinicie o Raspberry Pi para garantir que o overlay da câmera seja carregado." >&2
