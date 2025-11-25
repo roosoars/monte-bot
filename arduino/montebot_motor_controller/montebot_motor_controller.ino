@@ -22,10 +22,12 @@
  *   P1 - Slide Centro       : Sem ajuste lateral
  * 
  * Comandos de servo da cabeça (acionados pela detecção automática):
- *   H0   - Servo cabeça para centro (90 graus - olhando para frente)
- *   H45  - Servo cabeça 45 graus para esquerda
- *   H135 - Servo cabeça 45 graus para direita
- *   H<n> - Servo cabeça para posição n (0-180 graus, limitado a 0-90-180)
+ *   H0   - Servo cabeça para 0 graus (olhando para direita)
+ *   H45  - Servo cabeça para 45 graus
+ *   H90  - Servo cabeça para 90 graus (olhando para frente - centro)
+ *   H135 - Servo cabeça para 135 graus
+ *   H180 - Servo cabeça para 180 graus (olhando para esquerda)
+ *   H<n> - Servo cabeça para posição n (0-180 graus)
  * 
  * Comandos de rastreamento inteligente (turn + forward + recenter):
  *   TE - Rastreamento esquerda: vira esquerda, avança um pouco, volta para frente
@@ -86,12 +88,13 @@
 #define RIGHT_IN2   5   // Direção 2 do motor direito
 
 // Servo Motor (cabeça)
-#define SERVO_PIN        9    // Pino do servo motor
-#define SERVO_MIN_POS    0    // Posição mínima do servo (olhando para direita máxima)
-#define SERVO_LEFT_POS   60   // Posição esquerda do servo para slide
-#define SERVO_CENTER_POS 90   // Posição central do servo (olhando para frente)
-#define SERVO_RIGHT_POS  120  // Posição direita do servo para slide
-#define SERVO_MAX_POS    180  // Posição máxima do servo (olhando para esquerda máxima)
+#define SERVO_PIN           9    // Pino do servo motor
+#define HEAD_MIN_POS        0    // Posição mínima da cabeça (olhando para direita máxima)
+#define HEAD_CENTER_POS     90   // Posição central da cabeça (olhando para frente)
+#define HEAD_MAX_POS        180  // Posição máxima da cabeça (olhando para esquerda máxima)
+#define SLIDE_LEFT_POS      60   // Posição esquerda para ajuste fino (slide)
+#define SLIDE_CENTER_POS    90   // Posição central para ajuste fino (slide)
+#define SLIDE_RIGHT_POS     120  // Posição direita para ajuste fino (slide)
 
 // Tempos para manobras de rastreamento (em milissegundos)
 #define TRACK_TURN_TIME     200   // Tempo que fica virando (200ms)
@@ -114,7 +117,7 @@
 Servo servoMotor;
 
 // Posição atual do servo (0-180 graus)
-int servoPosition = SERVO_CENTER_POS;  // Posição central inicial
+int servoPosition = HEAD_CENTER_POS;  // Posição central inicial
 
 // Comando atual e anterior
 char currentCommand = 'P';      // Comando em execução
@@ -249,7 +252,7 @@ void turnRight() {
  */
 void adjustLeft() {
   // Move o servo para a esquerda
-  servoPosition = SERVO_LEFT_POS;
+  servoPosition = SLIDE_LEFT_POS;
   servoMotor.write(servoPosition);
 }
 
@@ -259,7 +262,7 @@ void adjustLeft() {
  */
 void adjustRight() {
   // Move o servo para a direita
-  servoPosition = SERVO_RIGHT_POS;
+  servoPosition = SLIDE_RIGHT_POS;
   servoMotor.write(servoPosition);
 }
 
@@ -268,18 +271,18 @@ void adjustRight() {
  */
 void noAdjustment() {
   // Centraliza o servo
-  servoPosition = SERVO_CENTER_POS;
+  servoPosition = SLIDE_CENTER_POS;
   servoMotor.write(servoPosition);
 }
 
 /**
  * Move o servo da cabeça para uma posição específica
- * @param pos Posição em graus (0-180, limitado entre SERVO_MIN_POS e SERVO_MAX_POS)
+ * @param pos Posição em graus (0-180, limitado entre HEAD_MIN_POS e HEAD_MAX_POS)
  */
 void setHeadPosition(int pos) {
   // Limita a posição entre os valores mínimo e máximo permitidos
-  if (pos < SERVO_MIN_POS) pos = SERVO_MIN_POS;
-  if (pos > SERVO_MAX_POS) pos = SERVO_MAX_POS;
+  if (pos < HEAD_MIN_POS) pos = HEAD_MIN_POS;
+  if (pos > HEAD_MAX_POS) pos = HEAD_MAX_POS;
   
   servoPosition = pos;
   servoMotor.write(servoPosition);
@@ -302,7 +305,7 @@ void trackLeft() {
   stopMotors();
   
   // 4. Centraliza o servo (cabeça olhando para frente)
-  setHeadPosition(SERVO_CENTER_POS);
+  setHeadPosition(HEAD_CENTER_POS);
 }
 
 /**
@@ -322,7 +325,7 @@ void trackRight() {
   stopMotors();
   
   // 4. Centraliza o servo (cabeça olhando para frente)
-  setHeadPosition(SERVO_CENTER_POS);
+  setHeadPosition(HEAD_CENTER_POS);
 }
 
 // =============================================================================
@@ -576,30 +579,30 @@ void motorTest() {
   
   // Teste servo motor - slide
   Serial.println("TEST:SERVO_SLIDE_LEFT");
-  servoMotor.write(SERVO_LEFT_POS);
+  servoMotor.write(SLIDE_LEFT_POS);
   delay(500);
   Serial.println("TEST:SERVO_CENTER");
-  servoMotor.write(SERVO_CENTER_POS);
+  servoMotor.write(SLIDE_CENTER_POS);
   delay(500);
   Serial.println("TEST:SERVO_SLIDE_RIGHT");
-  servoMotor.write(SERVO_RIGHT_POS);
+  servoMotor.write(SLIDE_RIGHT_POS);
   delay(500);
   Serial.println("TEST:SERVO_CENTER");
-  servoMotor.write(SERVO_CENTER_POS);
+  servoMotor.write(SLIDE_CENTER_POS);
   delay(500);
   
   // Teste servo motor - head tracking range (0-180 limited to safe range)
   Serial.println("TEST:HEAD_MAX_RIGHT");
-  setHeadPosition(SERVO_MIN_POS);  // 0 degrees
+  setHeadPosition(HEAD_MIN_POS);  // 0 degrees
   delay(500);
   Serial.println("TEST:HEAD_CENTER");
-  setHeadPosition(SERVO_CENTER_POS);  // 90 degrees
+  setHeadPosition(HEAD_CENTER_POS);  // 90 degrees
   delay(500);
   Serial.println("TEST:HEAD_MAX_LEFT");
-  setHeadPosition(SERVO_MAX_POS);  // 180 degrees
+  setHeadPosition(HEAD_MAX_POS);  // 180 degrees
   delay(500);
   Serial.println("TEST:HEAD_CENTER");
-  setHeadPosition(SERVO_CENTER_POS);
+  setHeadPosition(HEAD_CENTER_POS);
   delay(200);
   
   Serial.println("MOTOR_TEST:COMPLETE");

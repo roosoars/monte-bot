@@ -1188,9 +1188,13 @@ create_live_page() {
     const OFFSET_EXTREME = 0.40;     // Extreme offset - head turn + track maneuver
     
     // Head servo positions (matching Arduino constants)
-    const HEAD_CENTER = 90;          // Center position
-    const HEAD_MAX_LEFT = 180;       // Maximum left (0-90 range from center)
-    const HEAD_MAX_RIGHT = 0;        // Maximum right (0-90 range from center)
+    const HEAD_CENTER = 90;          // Center position (looking forward)
+    const HEAD_MAX_LEFT = 180;       // Maximum left (servo position 180)
+    const HEAD_MAX_RIGHT = 0;        // Maximum right (servo position 0)
+    const HEAD_RANGE = HEAD_MAX_LEFT - HEAD_MAX_RIGHT;  // Full servo range (180 degrees)
+    
+    // Sensitivity for medium offset head tracking (0.5 = less aggressive)
+    const MEDIUM_HEAD_SENSITIVITY = 0.5;
     
     // Tracking state
     let lastHeadPosition = HEAD_CENTER;
@@ -1522,7 +1526,7 @@ create_live_page() {
       // offset = -0.5 (far left) -> servo = 180 (look left)
       // offset = 0 (center) -> servo = 90 (look straight)
       // offset = 0.5 (far right) -> servo = 0 (look right)
-      let pos = HEAD_CENTER - (offset * 180);
+      let pos = HEAD_CENTER - (offset * HEAD_RANGE);
       
       // Limit to valid range (0-180)
       if (pos < HEAD_MAX_RIGHT) pos = HEAD_MAX_RIGHT;
@@ -1609,8 +1613,8 @@ create_live_page() {
         }
         // MEDIUM offset - turn + forward to realign
         else if (absOffset > OFFSET_MEDIUM) {
-          // Slight head movement to track user
-          headCmd = calculateHeadPosition(offset * 0.5);  // Less aggressive head turn
+          // Slight head movement to track user (less aggressive)
+          headCmd = calculateHeadPosition(offset * MEDIUM_HEAD_SENSITIVITY);
           
           // Check cooldown for tracking maneuver
           if (now - trackingCooldown > TRACKING_COOLDOWN_MS) {
