@@ -17,6 +17,8 @@ Firmware completo para controle de motores do robô R2D2 Monte Bot, desenvolvido
 
 Este firmware recebe comandos via Serial USB do Raspberry Pi e controla os motores do robô de acordo com o protocolo definido pelo sistema Monte Bot. É 100% compatível com o servidor WebSocket (`montebot-serial-bridge.py`) que roda no Raspberry Pi.
 
+**Nota:** Esta versão opera sem controle PWM de velocidade. Os motores funcionam em velocidade máxima fixa (ENA/ENB conectados via jumper a +5V). Um servo motor no pino 9 é usado para ajustes de direção.
+
 ### Fluxo de Comunicação
 
 ```
@@ -35,6 +37,7 @@ Este firmware recebe comandos via Serial USB do Raspberry Pi e controla os motor
 | Arduino Uno/Nano/Mega | 1 | Qualquer Arduino com USB e 6+ pinos digitais |
 | Driver L298N | 1 | Ou driver compatível (TB6612, BTS7960) |
 | Motores DC | 2 | 6-12V, compatíveis com o driver |
+| Servo Motor | 1 | Servo padrão (SG90, MG90S, etc.) |
 | Bateria | 1 | 7-12V para alimentar os motores |
 | Cabo USB | 1 | Para conectar Arduino ao Raspberry Pi |
 
@@ -56,38 +59,50 @@ Este firmware recebe comandos via Serial USB do Raspberry Pi e controla os motor
                   │                 │
     Arduino       │  IN1  IN2  ENA  │     Motor Esquerdo
     ────────      │  ───  ───  ───  │     ──────────────
-    Pino 7  ─────►│  ●              │
-    Pino 6  ─────►│       ●         │
-    Pino 5  ─────►│            ●    │ ════╗    ┌─────┐
+    Pino 2  ─────►│  ●              │
+    Pino 3  ─────►│       ●         │
+                  │            ●────┼──► Jumper +5V (velocidade fixa)
+                  │                 │ ════╗    ┌─────┐
                   │                 │     ╚════│  M  │
                   │  IN3  IN4  ENB  │     ╔════│  L  │
     Arduino       │  ───  ───  ───  │     ║    └─────┘
     ────────      │  ●              │ ════╝
     Pino 4  ─────►│       ●         │
-    Pino 3  ─────►│            ●    │ ════╗    ┌─────┐
-    Pino 9  ─────►│                 │     ╚════│  M  │
-                  │                 │     ╔════│  R  │
-                  │  GND  +12V  +5V │     ║    └─────┘
-                  │  ───  ────  ─── │ ════╝
-                  └─────────────────┘
+    Pino 5  ─────►│            ●────┼──► Jumper +5V (velocidade fixa)
+                  │                 │ ════╗    ┌─────┐
+                  │                 │     ╚════│  M  │
+                  │  GND  +12V  +5V │     ╔════│  R  │
+                  │  ───  ────  ─── │     ║    └─────┘
+                  └─────────────────┘ ════╝
                      │     │     │
                      │     │     └── Para Arduino 5V (opcional)
                      │     └──────── Bateria +
                      └────────────── Bateria - e Arduino GND
 ```
 
+### Conexão do Servo Motor
+
+```
+    Arduino        Servo Motor
+    ────────       ───────────
+    Pino 9  ──────► Sinal (laranja/amarelo)
+    5V      ──────► VCC (vermelho)
+    GND     ──────► GND (marrom/preto)
+```
+
 ### Tabela de Pinos
 
-| Pino Arduino | Função | Conexão L298N |
-|--------------|--------|---------------|
-| 7 | LEFT_IN1 | IN1 |
-| 6 | LEFT_IN2 | IN2 |
-| 5 | LEFT_PWM | ENA |
-| 4 | RIGHT_IN1 | IN3 |
-| 3 | RIGHT_IN2 | IN4 |
-| 9 | RIGHT_PWM | ENB |
-| GND | Terra | GND |
-| 5V | Alimentação (opcional) | +5V |
+| Pino Arduino | Função | Conexão |
+|--------------|--------|---------|
+| 2 | LEFT_IN1 | L298N IN1 |
+| 3 | LEFT_IN2 | L298N IN2 |
+| 4 | RIGHT_IN1 | L298N IN3 |
+| 5 | RIGHT_IN2 | L298N IN4 |
+| 9 | SERVO_PIN | Servo Motor (sinal) |
+| GND | Terra | GND comum |
+| 5V | Alimentação | Servo VCC |
+
+**Importante:** ENA e ENB do L298N devem ser conectados via jumper a +5V para velocidade máxima fixa.
 
 ### Diagrama de Fiação Completo
 
@@ -101,26 +116,26 @@ Este firmware recebe comandos via Serial USB do Raspberry Pi e controla os motor
                     ┌──────────────────┐      │
                     │     ARDUINO      │◄─────┘
                     │                  │
-                    │  7  6  5  4  3  9│
-                    │  │  │  │  │  │  ││
-                    │ GND ─────────────┼──┐
-                    │  5V ─────────────┼──┼──┐
-                    └──────────────────┘  │  │
-                       │  │  │  │  │  │   │  │
-    ┌──────────────────┘  │  │  │  │  │   │  │
-    │  ┌──────────────────┘  │  │  │  │   │  │
-    │  │  ┌──────────────────┘  │  │  │   │  │
-    │  │  │  ┌──────────────────┘  │  │   │  │
-    │  │  │  │  ┌──────────────────┘  │   │  │
-    │  │  │  │  │  ┌──────────────────┘   │  │
-    │  │  │  │  │  │                      │  │
-    ▼  ▼  ▼  ▼  ▼  ▼                      ▼  ▼
+                    │  2  3  4  5     9│──────┐
+                    │  │  │  │  │      │      │ Servo
+                    │ GND ─────────────┼──┐   │
+                    │  5V ─────────────┼──┼───┘
+                    └──────────────────┘  │
+                       │  │  │  │         │
+    ┌──────────────────┘  │  │  │         │
+    │  ┌──────────────────┘  │  │         │
+    │  │  ┌──────────────────┘  │         │
+    │  │  │  ┌──────────────────┘         │
+    │  │  │  │                            │
+    ▼  ▼  ▼  ▼                            ▼
    ┌────────────────────────────────────────────┐
    │               DRIVER L298N                  │
    │                                             │
    │  IN1 IN2 ENA    IN3 IN4 ENB    +12V GND +5V│
    │   │   │   │      │   │   │       │   │   │ │
    │   ▼   ▼   ▼      ▼   ▼   ▼       │   │   │ │
+   │       JUMPER         JUMPER      │   │   │ │
+   │       +5V            +5V         │   │   │ │
    │  ┌─────────┐    ┌─────────┐      │   │   │ │
    │  │ MOTOR E │    │ MOTOR D │      │   │   │ │
    │  │ (LEFT)  │    │ (RIGHT) │      │   │   │ │
@@ -201,13 +216,13 @@ WAITING_COMMANDS...
 | `D` | Direita (Right) | Motor E para frente, motor D para trás |
 | `P` | Parado (Stop) | Ambos motores parados |
 
-### Comandos de Slide (Ajuste Fino)
+### Comandos de Slide (Ajuste Fino com Servo)
 
 | Comando | Descrição | Ação |
 |---------|-----------|------|
-| `E1` | Slide Esquerda | Reduz velocidade do motor esquerdo |
-| `D1` | Slide Direita | Reduz velocidade do motor direito |
-| `P1` | Slide Centro | Remove ajustes de slide |
+| `E1` | Slide Esquerda | Move o servo para esquerda (60°) |
+| `D1` | Slide Direita | Move o servo para direita (120°) |
+| `P1` | Slide Centro | Centraliza o servo (90°) |
 
 ### Formato de Resposta
 
@@ -230,24 +245,18 @@ TIMEOUT:SAFETY_STOP  # Parada por timeout de segurança
 Se você usar pinos diferentes, edite as definições no início do código:
 
 ```cpp
-// Motor Esquerdo
-#define LEFT_IN1    7   // Mude para o pino desejado
-#define LEFT_IN2    6
-#define LEFT_PWM    5   // Precisa ser pino PWM (~)
+// Motor Esquerdo (L298N IN1/IN2)
+// NOTA: ENA deve ser conectado via jumper a +5V
+#define LEFT_IN1    2   // Direção 1 do motor esquerdo
+#define LEFT_IN2    3   // Direção 2 do motor esquerdo
 
-// Motor Direito
-#define RIGHT_IN1   4
-#define RIGHT_IN2   3
-#define RIGHT_PWM   9   // Precisa ser pino PWM (~)
-```
+// Motor Direito (L298N IN3/IN4)
+// NOTA: ENB deve ser conectado via jumper a +5V
+#define RIGHT_IN1   4   // Direção 1 do motor direito
+#define RIGHT_IN2   5   // Direção 2 do motor direito
 
-### Ajuste de Velocidades
-
-```cpp
-#define SPEED_MAX         200   // Velocidade máxima (0-255)
-#define SPEED_MEDIUM      150   // Velocidade de virada
-#define SPEED_SLOW        100   // Velocidade lenta
-#define SPEED_CORRECTION   80   // Correção de trajetória
+// Servo Motor
+#define SERVO_PIN   9   // Pino do servo motor
 ```
 
 ### Timeout de Segurança

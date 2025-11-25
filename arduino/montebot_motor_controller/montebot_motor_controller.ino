@@ -26,14 +26,19 @@
  * Driver L298N (ou compatível):
  * 
  * Motor Esquerdo:
- *   - IN1 -> Pino 7 (ENA_PIN1)
- *   - IN2 -> Pino 6 (ENA_PIN2)
- *   - ENA -> Pino 5 (PWM_LEFT) - PWM para controle de velocidade
+ *   - IN1 -> Pino 2 (LEFT_IN1)
+ *   - IN2 -> Pino 3 (LEFT_IN2)
+ *   - ENA -> Jumper para +5V (velocidade máxima fixa)
  * 
  * Motor Direito:
- *   - IN3 -> Pino 4 (ENB_PIN1)
- *   - IN4 -> Pino 3 (ENB_PIN2)
- *   - ENB -> Pino 9 (PWM_RIGHT) - PWM para controle de velocidade
+ *   - IN3 -> Pino 4 (RIGHT_IN1)
+ *   - IN4 -> Pino 5 (RIGHT_IN2)
+ *   - ENB -> Jumper para +5V (velocidade máxima fixa)
+ * 
+ * Servo Motor:
+ *   - Sinal -> Pino 9
+ *   - VCC -> 5V
+ *   - GND -> GND
  * 
  * Alimentação:
  *   - VCC do L298N -> Bateria (7-12V para motores)
@@ -52,7 +57,7 @@
  * Pode ser alterado via variável de ambiente SERIAL_BAUDRATE no Raspberry Pi
  * 
  * @author Monte Bot Team - UFU
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2024
  */
 
@@ -60,49 +65,42 @@
 // CONFIGURAÇÃO DE PINOS - Ajuste conforme sua montagem
 // =============================================================================
 
-// Motor Esquerdo (Left Motor) - L298N IN1/IN2/ENA
-#define LEFT_IN1    7   // Direção 1 do motor esquerdo
-#define LEFT_IN2    6   // Direção 2 do motor esquerdo
-#define LEFT_PWM    5   // Velocidade do motor esquerdo (PWM)
+// Motor Esquerdo (Left Motor) - L298N IN1/IN2
+// NOTA: ENA deve ser conectado via jumper a +5V para velocidade máxima fixa
+#define LEFT_IN1    2   // Direção 1 do motor esquerdo
+#define LEFT_IN2    3   // Direção 2 do motor esquerdo
 
-// Motor Direito (Right Motor) - L298N IN3/IN4/ENB
+// Motor Direito (Right Motor) - L298N IN3/IN4
+// NOTA: ENB deve ser conectado via jumper a +5V para velocidade máxima fixa
 #define RIGHT_IN1   4   // Direção 1 do motor direito
-#define RIGHT_IN2   3   // Direção 2 do motor direito
-#define RIGHT_PWM   9   // Velocidade do motor direito (PWM)
+#define RIGHT_IN2   5   // Direção 2 do motor direito
+
+// Servo Motor
+#define SERVO_PIN   9   // Pino do servo motor
 
 // LED de status
 #define STATUS_LED  LED_BUILTIN  // Pino 13 na maioria dos Arduinos
 
 // =============================================================================
-// CONFIGURAÇÃO DE VELOCIDADES - Ajuste conforme necessário (0-255)
+// BIBLIOTECAS
 // =============================================================================
 
-#define SPEED_MAX         200   // Velocidade máxima (movimento principal)
-#define SPEED_MEDIUM      150   // Velocidade média (viradas)
-#define SPEED_SLOW        100   // Velocidade lenta (ajustes finos)
-#define SPEED_CORRECTION   80   // Velocidade de correção de trajetória (slide)
-
-// Tempo de rampa de aceleração (ms) - para suavizar movimentos (recurso opcional)
-// Descomente updateRamp() no loop() para usar
-#define RAMP_DELAY         10   // Delay entre incrementos de velocidade
-#define RAMP_INCREMENT     20   // Incremento de velocidade por passo
+#include <Servo.h>
 
 // =============================================================================
 // VARIÁVEIS GLOBAIS
 // =============================================================================
 
+// Objeto Servo
+Servo servoMotor;
+
+// Posição atual do servo (0-180 graus)
+int servoPosition = 90;  // Posição central inicial
+
 // Comando atual e anterior
 char currentCommand = 'P';      // Comando em execução
 char lastCommand = 'P';         // Último comando recebido
 char slideCommand = 'P';        // Comando de slide (E1, D1, P1)
-
-// Velocidades atuais dos motores
-int leftSpeed = 0;
-int rightSpeed = 0;
-
-// Velocidades alvo (usadas apenas com rampa de aceleração habilitada)
-int targetLeftSpeed = 0;
-int targetRightSpeed = 0;
 
 // Direções dos motores
 bool leftForward = true;
@@ -110,7 +108,6 @@ bool rightForward = true;
 
 // Controle de tempo
 unsigned long lastCommandTime = 0;
-unsigned long lastRampTime = 0;  // Usada apenas com rampa de aceleração
 const unsigned long TIMEOUT_MS = 500;  // Timeout de segurança (para comandos)
 
 // Buffer de entrada serial
@@ -122,74 +119,68 @@ bool commandComplete = false;
 // =============================================================================
 
 /**
- * Configura os pinos de saída para os motores
+ * Configura os pinos de saída para os motores e servo
  */
 void setupMotorPins() {
   pinMode(LEFT_IN1, OUTPUT);
   pinMode(LEFT_IN2, OUTPUT);
-  pinMode(LEFT_PWM, OUTPUT);
   
   pinMode(RIGHT_IN1, OUTPUT);
   pinMode(RIGHT_IN2, OUTPUT);
-  pinMode(RIGHT_PWM, OUTPUT);
   
   pinMode(STATUS_LED, OUTPUT);
+  
+  // Configura o servo motor
+  servoMotor.attach(SERVO_PIN);
+  servoMotor.write(servoPosition);  // Posição inicial (centro)
   
   // Iniciar com motores parados
   stopMotors();
 }
 
 /**
- * Define a velocidade e direção do motor esquerdo
- * @param speed Velocidade (0-255)
+ * Define a direção do motor esquerdo (sem controle PWM, velocidade fixa)
  * @param forward true = frente, false = trás
+ * @param active true = motor ligado, false = motor parado
  */
-void setLeftMotor(int speed, bool forward) {
-  leftSpeed = constrain(speed, 0, 255);
+void setLeftMotor(bool forward, bool active) {
   leftForward = forward;
   
-  if (leftSpeed == 0) {
+  if (!active) {
     // Motor parado
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, LOW);
-    analogWrite(LEFT_PWM, 0);
   } else if (forward) {
     // Motor para frente
     digitalWrite(LEFT_IN1, HIGH);
     digitalWrite(LEFT_IN2, LOW);
-    analogWrite(LEFT_PWM, leftSpeed);
   } else {
     // Motor para trás
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, HIGH);
-    analogWrite(LEFT_PWM, leftSpeed);
   }
 }
 
 /**
- * Define a velocidade e direção do motor direito
- * @param speed Velocidade (0-255)
+ * Define a direção do motor direito (sem controle PWM, velocidade fixa)
  * @param forward true = frente, false = trás
+ * @param active true = motor ligado, false = motor parado
  */
-void setRightMotor(int speed, bool forward) {
-  rightSpeed = constrain(speed, 0, 255);
+void setRightMotor(bool forward, bool active) {
   rightForward = forward;
   
-  if (rightSpeed == 0) {
+  if (!active) {
     // Motor parado
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, LOW);
-    analogWrite(RIGHT_PWM, 0);
   } else if (forward) {
     // Motor para frente
     digitalWrite(RIGHT_IN1, HIGH);
     digitalWrite(RIGHT_IN2, LOW);
-    analogWrite(RIGHT_PWM, rightSpeed);
   } else {
     // Motor para trás
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, HIGH);
-    analogWrite(RIGHT_PWM, rightSpeed);
   }
 }
 
@@ -197,78 +188,69 @@ void setRightMotor(int speed, bool forward) {
  * Para ambos os motores imediatamente
  */
 void stopMotors() {
-  setLeftMotor(0, true);
-  setRightMotor(0, true);
-  targetLeftSpeed = 0;
-  targetRightSpeed = 0;
+  setLeftMotor(true, false);
+  setRightMotor(true, false);
 }
 
 /**
  * Move o robô para frente
  */
 void moveForward() {
-  targetLeftSpeed = SPEED_MAX;
-  targetRightSpeed = SPEED_MAX;
-  setLeftMotor(SPEED_MAX, true);
-  setRightMotor(SPEED_MAX, true);
+  setLeftMotor(true, true);
+  setRightMotor(true, true);
 }
 
 /**
  * Move o robô para trás
  */
 void moveBackward() {
-  targetLeftSpeed = SPEED_MAX;
-  targetRightSpeed = SPEED_MAX;
-  setLeftMotor(SPEED_MAX, false);
-  setRightMotor(SPEED_MAX, false);
+  setLeftMotor(false, true);
+  setRightMotor(false, true);
 }
 
 /**
  * Vira o robô para a esquerda (no próprio eixo)
  */
 void turnLeft() {
-  targetLeftSpeed = SPEED_MEDIUM;
-  targetRightSpeed = SPEED_MEDIUM;
-  setLeftMotor(SPEED_MEDIUM, false);  // Motor esquerdo para trás
-  setRightMotor(SPEED_MEDIUM, true);  // Motor direito para frente
+  setLeftMotor(false, true);  // Motor esquerdo para trás
+  setRightMotor(true, true);  // Motor direito para frente
 }
 
 /**
  * Vira o robô para a direita (no próprio eixo)
  */
 void turnRight() {
-  targetLeftSpeed = SPEED_MEDIUM;
-  targetRightSpeed = SPEED_MEDIUM;
-  setLeftMotor(SPEED_MEDIUM, true);   // Motor esquerdo para frente
-  setRightMotor(SPEED_MEDIUM, false); // Motor direito para trás
+  setLeftMotor(true, true);   // Motor esquerdo para frente
+  setRightMotor(false, true); // Motor direito para trás
 }
 
 /**
- * Ajuste fino para esquerda (correção de trajetória)
+ * Ajuste fino para esquerda usando o servo (correção de trajetória)
  * Usado quando o slide horizontal é movido para esquerda
  */
 void adjustLeft() {
-  // Reduz velocidade do motor esquerdo para curvar suavemente
-  int adjustedLeftSpeed = max(0, leftSpeed - SPEED_CORRECTION);
-  setLeftMotor(adjustedLeftSpeed, leftForward);
+  // Move o servo para a esquerda
+  servoPosition = 60;  // Posição esquerda
+  servoMotor.write(servoPosition);
 }
 
 /**
- * Ajuste fino para direita (correção de trajetória)
+ * Ajuste fino para direita usando o servo (correção de trajetória)
  * Usado quando o slide horizontal é movido para direita
  */
 void adjustRight() {
-  // Reduz velocidade do motor direito para curvar suavemente
-  int adjustedRightSpeed = max(0, rightSpeed - SPEED_CORRECTION);
-  setRightMotor(adjustedRightSpeed, rightForward);
+  // Move o servo para a direita
+  servoPosition = 120;  // Posição direita
+  servoMotor.write(servoPosition);
 }
 
 /**
- * Remove ajustes de correção
+ * Remove ajustes de correção (centraliza o servo)
  */
 void noAdjustment() {
-  // Restaura velocidades baseado no comando principal atual
-  executeMainCommand(currentCommand);
+  // Centraliza o servo
+  servoPosition = 90;  // Posição central
+  servoMotor.write(servoPosition);
 }
 
 // =============================================================================
@@ -390,35 +372,6 @@ void checkCommandTimeout() {
   }
 }
 
-/**
- * Função de rampa de aceleração (opcional)
- * Suaviza transições de velocidade
- */
-void updateRamp() {
-  if (millis() - lastRampTime < RAMP_DELAY) {
-    return;
-  }
-  lastRampTime = millis();
-  
-  // Rampa para motor esquerdo
-  if (leftSpeed < targetLeftSpeed) {
-    leftSpeed = min(leftSpeed + RAMP_INCREMENT, targetLeftSpeed);
-    analogWrite(LEFT_PWM, leftSpeed);
-  } else if (leftSpeed > targetLeftSpeed) {
-    leftSpeed = max(leftSpeed - RAMP_INCREMENT, targetLeftSpeed);
-    analogWrite(LEFT_PWM, leftSpeed);
-  }
-  
-  // Rampa para motor direito
-  if (rightSpeed < targetRightSpeed) {
-    rightSpeed = min(rightSpeed + RAMP_INCREMENT, targetRightSpeed);
-    analogWrite(RIGHT_PWM, rightSpeed);
-  } else if (rightSpeed > targetRightSpeed) {
-    rightSpeed = max(rightSpeed - RAMP_INCREMENT, targetRightSpeed);
-    analogWrite(RIGHT_PWM, rightSpeed);
-  }
-}
-
 // =============================================================================
 // FUNÇÃO DE LEITURA SERIAL
 // =============================================================================
@@ -453,7 +406,7 @@ void readSerialData() {
 // =============================================================================
 
 /**
- * Teste automático dos motores ao iniciar
+ * Teste automático dos motores e servo ao iniciar
  * Executa uma sequência de movimentos para verificar funcionamento
  */
 void motorTest() {
@@ -461,30 +414,44 @@ void motorTest() {
   
   // Teste motor esquerdo para frente
   Serial.println("TEST:LEFT_FORWARD");
-  setLeftMotor(SPEED_SLOW, true);
+  setLeftMotor(true, true);
   delay(300);
-  setLeftMotor(0, true);
+  setLeftMotor(true, false);
   delay(200);
   
   // Teste motor esquerdo para trás
   Serial.println("TEST:LEFT_BACKWARD");
-  setLeftMotor(SPEED_SLOW, false);
+  setLeftMotor(false, true);
   delay(300);
-  setLeftMotor(0, true);
+  setLeftMotor(true, false);
   delay(200);
   
   // Teste motor direito para frente
   Serial.println("TEST:RIGHT_FORWARD");
-  setRightMotor(SPEED_SLOW, true);
+  setRightMotor(true, true);
   delay(300);
-  setRightMotor(0, true);
+  setRightMotor(true, false);
   delay(200);
   
   // Teste motor direito para trás
   Serial.println("TEST:RIGHT_BACKWARD");
-  setRightMotor(SPEED_SLOW, false);
+  setRightMotor(false, true);
   delay(300);
-  setRightMotor(0, true);
+  setRightMotor(true, false);
+  delay(200);
+  
+  // Teste servo motor
+  Serial.println("TEST:SERVO_LEFT");
+  servoMotor.write(60);
+  delay(500);
+  Serial.println("TEST:SERVO_CENTER");
+  servoMotor.write(90);
+  delay(500);
+  Serial.println("TEST:SERVO_RIGHT");
+  servoMotor.write(120);
+  delay(500);
+  Serial.println("TEST:SERVO_CENTER");
+  servoMotor.write(90);
   delay(200);
   
   Serial.println("MOTOR_TEST:COMPLETE");
@@ -509,7 +476,7 @@ void setup() {
     ; // Aguarda conexão USB ou timeout
   }
   
-  // Configurar pinos dos motores
+  // Configurar pinos dos motores e servo
   setupMotorPins();
   
   // Mensagem de inicialização
@@ -518,9 +485,13 @@ void setup() {
   Serial.println("    MONTE BOT - Motor Controller");
   Serial.println("    Liga Academica MONTE BOT - UFU");
   Serial.println("========================================");
-  Serial.println("VERSION:1.0.0");
+  Serial.println("VERSION:1.1.0");
   Serial.println("BAUDRATE:115200");
   Serial.println("STATUS:READY");
+  Serial.println("");
+  Serial.println("PINS:");
+  Serial.println("  Motors: 2,3,4,5 (ENA/ENB jumper to +5V)");
+  Serial.println("  Servo: 9");
   Serial.println("");
   Serial.println("COMMANDS:");
   Serial.println("  F=Forward, T=Back, E=Left, D=Right, P=Stop");
@@ -542,9 +513,6 @@ void loop() {
   
   // Verifica timeout de segurança
   checkCommandTimeout();
-  
-  // Atualiza rampa de aceleração (opcional)
-  // updateRamp();
   
   // Pequeno delay para estabilidade
   delay(1);
