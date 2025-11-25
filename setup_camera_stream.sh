@@ -299,7 +299,7 @@ rpicam-vid \
   --inline \
   --flush \
   -o - \
-  2>&1 | ffmpeg \
+  2>/dev/null | ffmpeg \
       -loglevel warning \
       -fflags nobuffer+flush_packets \
       -flags low_delay \
@@ -719,7 +719,11 @@ async def periodic_status():
             wait_time = min(5 * reconnect_attempts, max_reconnect_wait)
             
             if reconnect_attempts <= 3 or reconnect_attempts % 6 == 0:  # Log every 30 seconds after initial attempts
-                await log_and_broadcast("DEBUG", "SERIAL", f"Attempting to find serial port (attempt {reconnect_attempts})...")
+                await log_and_broadcast("DEBUG", "SERIAL", f"Attempting to find serial port (attempt {reconnect_attempts}, waiting {wait_time}s)...")
+            
+            # Wait before reconnection attempt (exponential backoff)
+            if reconnect_attempts > 1:
+                await asyncio.sleep(wait_time)
             
             result = await init_serial()
             if result:

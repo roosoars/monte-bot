@@ -1177,9 +1177,10 @@ create_live_page() {
     // Persistence functions
     function saveState() {
       localStorage.setItem('montebot_tracking_paused', trackingPaused);
-      if (serialConnected && lastSerialPort) {
+      // Always save serial state, including disconnected state
+      localStorage.setItem('montebot_serial_connected', serialConnected ? 'true' : 'false');
+      if (lastSerialPort) {
         localStorage.setItem('montebot_serial_port', lastSerialPort);
-        localStorage.setItem('montebot_serial_connected', 'true');
       }
     }
 
