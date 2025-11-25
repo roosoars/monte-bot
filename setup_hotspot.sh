@@ -27,10 +27,12 @@ sync_system_clock() {
   # "Release file not valid yet" errors.
   echo "[INFO] Checking system clock synchronization..."
 
-  # Check if system time is obviously wrong (before year 2024)
+  # Check if system time is obviously wrong (before year 2020)
+  # Using 2020 as a safe minimum since any reasonable Raspberry Pi OS installation
+  # would be from 2020 or later.
   local current_year
   current_year=$(date +%Y)
-  if [[ ${current_year} -lt 2024 ]]; then
+  if [[ ${current_year} -lt 2020 ]]; then
     echo "[WARNING] System clock appears to be incorrect (year: ${current_year}). Attempting to sync..."
   fi
 
@@ -58,14 +60,11 @@ sync_system_clock() {
       fi
     fi
 
-    # Alternative: check if year is now reasonable
+    # Alternative: check if year is now reasonable (2020 or later)
     current_year=$(date +%Y)
-    if [[ ${current_year} -ge 2024 ]]; then
-      # Check if we can fetch package lists without error (quick test)
-      if apt-get update -qq --print-uris >/dev/null 2>&1; then
-        echo "[INFO] System clock appears to be correct (year: ${current_year})."
-        return 0
-      fi
+    if [[ ${current_year} -ge 2020 ]]; then
+      echo "[INFO] System clock appears to be correct (year: ${current_year})."
+      return 0
     fi
 
     sleep 1
@@ -83,7 +82,7 @@ sync_system_clock() {
 
   # Final check
   current_year=$(date +%Y)
-  if [[ ${current_year} -lt 2024 ]]; then
+  if [[ ${current_year} -lt 2020 ]]; then
     echo "[WARNING] Could not synchronize system clock. apt-get update may fail."
     echo "[WARNING] Please ensure the Raspberry Pi has internet access and try again."
   else
