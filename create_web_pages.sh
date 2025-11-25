@@ -169,25 +169,11 @@ create_index_page() {
         <span class="menu-item-icon">▶</span>
       </a>
 
-      <a href="/position.html" class="menu-item">
-        <div class="menu-item-content">
-          <div class="menu-item-title">Posição</div>
-          <div class="menu-item-desc">Comandos em tempo real para motores (P, F, E, D, T)</div>
-        </div>
-        <span class="menu-item-icon">📡</span>
-      </a>
 
-      <div class="menu-item" onclick="alert('Calibração em desenvolvimento')">
-        <div class="menu-item-content">
-          <div class="menu-item-title">Calibração</div>
-          <div class="menu-item-desc">Calibrar sensores e motores</div>
-        </div>
-        <span class="menu-item-icon">🎯</span>
-      </div>
     </nav>
 
     <div class="info-box">
-      <p><strong>Dica:</strong> Configure o alvo, use "Live" para rastrear e "Posição" para comandos de motor.</p>
+      <p><strong>Dica:</strong> Configure o alvo e use "Live" para rastrear.</p>
       <p><strong>Rede:</strong> Conectado ao hotspot MonteHotspot</p>
       <p><strong>IP:</strong> 192.168.50.1</p>
       <div id="target-status" class="target-status no-target">
@@ -1174,8 +1160,8 @@ create_live_page() {
           joystickStatus.textContent = 'F';
           console.log('[MonteBot] F');
         } else if (offsetY > threshold) {
-          joystickStatus.textContent = 'A';
-          console.log('[MonteBot] A');
+          joystickStatus.textContent = 'T';
+          console.log('[MonteBot] T');
         } else {
           joystickStatus.textContent = 'P';
         }
