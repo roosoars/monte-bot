@@ -48,16 +48,17 @@ Edite as variáveis no topo do script antes de executar para ajustar rede, segur
 
 ### Streaming (`setup_camera_stream.sh`)
 
-O sistema usa configurações otimizadas para **ultra-baixa latência** no streaming de vídeo:
+O sistema usa configurações otimizadas para **streaming instantâneo** com latência mínima de 150-300ms:
 
 | Variável | Valor Padrão | Descrição |
 |----------|--------------|-----------|
 | `STREAM_FRAMERATE` | `30` | Taxa de quadros por segundo |
-| `STREAM_WIDTH` | `640` | Largura do vídeo (480p para menor latência) |
-| `STREAM_HEIGHT` | `480` | Altura do vídeo (480p para streaming quase instantâneo) |
-| `STREAM_BITRATE` | `1500000` | Taxa de bits (1.5 Mbps - otimizado para velocidade) |
-| `HLS_SEGMENT_SECONDS` | `0.2` | Duração do segmento HLS (200ms ultra-curto) |
-| `HLS_LIST_SIZE` | `3` | Número de segmentos na playlist |
+| `STREAM_WIDTH` | `640` | Largura do vídeo (480p compacto para velocidade máxima) |
+| `STREAM_HEIGHT` | `480` | Altura do vídeo (480p para streaming instantâneo) |
+| `STREAM_BITRATE` | `2000000` | Taxa de bits (2 Mbps - otimizado para velocidade) |
+| `STREAM_KEYFRAME_INTERVAL` | `10` | Keyframe a cada 10 frames (~333ms @ 30fps) |
+| `HLS_SEGMENT_SECONDS` | `0.15` | Duração do segmento HLS (150ms - instantâneo + estável) |
+| `HLS_LIST_SIZE` | `2` | Número mínimo de segmentos na playlist |
 | `STREAM_STARTUP_TIMEOUT` | `30` | Tempo máximo (segundos) para aguardar a criação dos arquivos de stream |
 
 O binário `rpicam-hls.sh` aceita variáveis de ambiente para ajustar o stream. Crie um drop-in systemd para preservar mudanças:
@@ -73,7 +74,10 @@ Exemplo de conteúdo:
 Environment=STREAM_FRAMERATE=30
 Environment=STREAM_WIDTH=640
 Environment=STREAM_HEIGHT=480
-Environment=STREAM_BITRATE=1500000
+Environment=STREAM_BITRATE=2000000
+Environment=STREAM_KEYFRAME_INTERVAL=10
+Environment=HLS_SEGMENT_SECONDS=0.15
+Environment=HLS_LIST_SIZE=2
 ```
 
 Recarregue e reinicie:
