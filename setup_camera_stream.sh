@@ -282,11 +282,15 @@ wait_for_camera() {
     fi
   done
   
+  # Cache diagnostic info to avoid delays in error reporting
+  local video_devices
+  video_devices=$(ls /dev/video* 2>/dev/null || echo 'none')
+  
   log_error "Camera not detected after ${max_wait} seconds"
   log_error "Diagnostic info:"
-  log_error "  - /dev/video* devices: $(ls /dev/video* 2>/dev/null || echo 'none')"
-  log_error "  - libcamera-hello output: $(libcamera-hello --list-cameras 2>&1 | head -5 || echo 'N/A')"
-  log_error "  - rpicam-vid output: $(rpicam-vid --list-cameras 2>&1 | head -5 || echo 'N/A')"
+  log_error "  - /dev/video* devices: ${video_devices}"
+  log_error "  - Check journalctl for camera driver errors: journalctl -b | grep -i camera"
+  log_error "  - Try running manually: libcamera-hello --list-cameras"
   return 1
 }
 
@@ -318,7 +322,7 @@ sleep 2
 
 # Run the pipeline with error handling
 # Note: We redirect rpicam-vid stderr to a temporary file for better debugging
-RPICAM_ERR=$(mktemp)
+RPICAM_ERR=$(mktemp /tmp/rpicam_err.XXXXXX)
 rpicam-vid \
   --timeout 0 \
   --nopreview \
@@ -354,13 +358,15 @@ rpicam-vid \
 PIPELINE_EXIT=$?
 if [[ ${PIPELINE_EXIT} -ne 0 ]]; then
   log_error "Pipeline exited with code ${PIPELINE_EXIT}"
-  if [[ -f "${RPICAM_ERR}" ]]; then
+  if [[ -f "${RPICAM_ERR}" && -s "${RPICAM_ERR}" ]]; then
     log_error "rpicam-vid errors: $(cat "${RPICAM_ERR}")"
-    rm -f "${RPICAM_ERR}"
   fi
+  # Cleanup is handled by trap, just exit
   exit ${PIPELINE_EXIT}
 fi
-rm -f "${RPICAM_ERR}"
+# Clear RPICAM_ERR so cleanup function won't try to delete it again
+rm -f "${RPICAM_ERR}" 2>/dev/null || true
+RPICAM_ERR=""
 EOF
   chmod 755 "${CAMERA_RUNNER}"
 }
