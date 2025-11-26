@@ -149,22 +149,14 @@ create_index_page() {
     <div class="header">
       <span class="badge">Monte Bot R2D2</span>
       <h1>Menu Principal</h1>
-      <p class="subtitle">Sistema de controle e rastreamento autônomo</p>
+      <p class="subtitle">Sistema de controle remoto do robô</p>
     </div>
 
     <nav class="menu">
-      <a href="/config.html" class="menu-item">
-        <div class="menu-item-content">
-          <div class="menu-item-title">Configurar Alvo</div>
-          <div class="menu-item-desc">Detectar e gravar pessoa para seguir</div>
-        </div>
-        <span class="menu-item-icon">👤</span>
-      </a>
-
       <a href="/live.html" class="menu-item">
         <div class="menu-item-content">
           <div class="menu-item-title">Live</div>
-          <div class="menu-item-desc">Controle ao vivo - seguir pessoa configurada</div>
+          <div class="menu-item-desc">Controle ao vivo com câmera e joystick</div>
         </div>
         <span class="menu-item-icon">▶</span>
       </a>
@@ -180,27 +172,15 @@ create_index_page() {
     </nav>
 
     <div class="info-box">
-      <p><strong>Dica:</strong> Configure o alvo e use "Live" para rastrear.</p>
+      <p><strong>Dica:</strong> Use "Live" para controlar o robô manualmente.</p>
       <p><strong>Rede:</strong> Conectado ao hotspot MonteHotspot</p>
       <p><strong>IP:</strong> 192.168.50.1</p>
       <div id="serial-status" class="target-status no-target">
         <p id="serial-text">🔴 Serial: Verificando...</p>
       </div>
-      <div id="target-status" class="target-status no-target">
-        <p id="target-text">⚠️ Nenhum alvo configurado</p>
-      </div>
     </div>
   </div>
   <script>
-    // Check if target is saved
-    const savedTarget = localStorage.getItem('montebot_target');
-    if (savedTarget) {
-      const targetStatus = document.getElementById('target-status');
-      const targetText = document.getElementById('target-text');
-      targetStatus.classList.remove('no-target');
-      targetText.textContent = '✅ Alvo configurado e pronto para seguir';
-    }
-    
     // Check serial status from localStorage
     const serialConnected = localStorage.getItem('montebot_serial_connected');
     const serialPort = localStorage.getItem('montebot_serial_port');
@@ -1069,6 +1049,7 @@ create_live_page() {
       text-align: center;
     }
     #target-indicator {
+      display: none;
       position: absolute;
       top: 90px;
       left: 20px;
@@ -1086,7 +1067,7 @@ create_live_page() {
     }
     #serial-indicator {
       position: absolute;
-      top: 130px;
+      top: 90px;
       left: 20px;
       background: rgba(100, 0, 0, 0.7);
       padding: 8px 15px;
@@ -1118,6 +1099,7 @@ create_live_page() {
     }
     #back-button:hover { background: rgba(0, 198, 255, 0.2); transform: scale(1.05); }
     #tracking-toggle {
+      display: none;
       position: absolute;
       bottom: 100px;
       left: 30px;
@@ -1423,7 +1405,7 @@ create_live_page() {
             console.warn('[MonteBot] Autoplay bloqueado pelo navegador:', err);
           });
           ensureVideoSizing();
-          initTracking();
+          // Detection disabled - initTracking();
         });
         video.addEventListener('error', (e) => {
           const errorMsg = getVideoErrorMessage(video.error);
@@ -1476,7 +1458,7 @@ create_live_page() {
           streamRetryCount = 0;
           video.play().catch(() => {});
           ensureVideoSizing();
-          initTracking();
+          // Detection disabled - initTracking();
         });
         // Auto-sync to live edge on stall and handle fatal errors
         hls.on(Hls.Events.ERROR, function (event, data) {
@@ -2942,7 +2924,6 @@ LOGSEOF
 
 # Executar criação das páginas
 create_index_page
-create_config_page
 create_live_page
 create_position_page
 create_logs_page

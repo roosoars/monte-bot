@@ -162,7 +162,7 @@ EOF
 }
 
 prepare_filesystem() {
-  mkdir -p "${STREAM_DIR}" "${STATIC_DIR}" "${STATIC_DIR}/models" "${STATIC_DIR}/mediapipe/wasm"
+  mkdir -p "${STREAM_DIR}" "${STATIC_DIR}"
   chown -R www-data:www-data /var/www/html || true
   chmod -R 755 /var/www/html
   rm -f "${STREAM_DIR}"/*.ts "${STREAM_DIR}/index.m3u8" >/dev/null 2>&1 || true
@@ -174,35 +174,7 @@ download_hls_library() {
   ensure_asset "${packaged}" "${url}" "${HLS_JS_PATH}"
 }
 
-download_mediapipe_assets() {
-  local base_url="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0"
-  local base_dir="${STATIC_DIR}/mediapipe"
-  local wasm_dir="${base_dir}/wasm"
 
-  ensure_asset "${ASSET_ROOT}/static/mediapipe/vision_bundle.js" \
-    "${base_url}/vision_bundle.js" \
-    "${base_dir}/vision_bundle.js"
-
-  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_internal.js" \
-    "${base_url}/wasm/vision_wasm_internal.js" \
-    "${wasm_dir}/vision_wasm_internal.js"
-
-  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_internal.wasm" \
-    "${base_url}/wasm/vision_wasm_internal.wasm" \
-    "${wasm_dir}/vision_wasm_internal.wasm"
-
-  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_nosimd_internal.js" \
-    "${base_url}/wasm/vision_wasm_nosimd_internal.js" \
-    "${wasm_dir}/vision_wasm_nosimd_internal.js"
-
-  ensure_asset "${ASSET_ROOT}/static/mediapipe/wasm/vision_wasm_nosimd_internal.wasm" \
-    "${base_url}/wasm/vision_wasm_nosimd_internal.wasm" \
-    "${wasm_dir}/vision_wasm_nosimd_internal.wasm"
-
-  ensure_asset "${ASSET_ROOT}/static/models/efficientdet_lite0.tflite" \
-    "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite" \
-    "${STATIC_DIR}/models/efficientdet_lite0.tflite"
-}
 
 write_camera_runner() {
   cat <<'EOF' >"${CAMERA_RUNNER}"
@@ -1789,7 +1761,6 @@ main() {
   enable_camera_overlay
   prepare_filesystem
   download_hls_library
-  download_mediapipe_assets
   write_camera_runner
   write_systemd_service
   write_serial_bridge
