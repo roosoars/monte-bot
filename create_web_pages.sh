@@ -532,7 +532,7 @@ create_config_page() {
         case MediaError.MEDIA_ERR_DECODE:
           return 'Erro ao decodificar o vídeo. A câmera pode não estar gerando frames válidos';
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          return 'Formato de vídeo não suportado ou stream não encontrado. Verifique se o arquivo stream/index.m3u8 existe';
+          return 'Stream não encontrado. O serviço de câmera pode não estar rodando. Execute: sudo systemctl restart rpicam-hls';
         default:
           return 'Erro desconhecido: código ' + error.code;
       }
@@ -1404,11 +1404,11 @@ create_live_page() {
         case MediaError.MEDIA_ERR_ABORTED:
           return 'Carregamento do vídeo foi cancelado';
         case MediaError.MEDIA_ERR_NETWORK:
-          return 'Erro de rede ao carregar o vídeo. Verifique se o serviço rpicam-hls está rodando';
+          return 'Erro de rede ao carregar o vídeo. Execute: sudo systemctl restart rpicam-hls';
         case MediaError.MEDIA_ERR_DECODE:
           return 'Erro ao decodificar o vídeo. A câmera pode não estar gerando frames válidos';
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          return 'Formato de vídeo não suportado ou stream não encontrado';
+          return 'Stream não encontrado. O serviço de câmera pode não estar rodando. Execute: sudo systemctl restart rpicam-hls';
         default:
           return 'Erro desconhecido: código ' + error.code;
       }

@@ -222,7 +222,14 @@ log_error() {
   logger -t "${LOG_TAG}" "[ERROR] $1" 2>/dev/null || true
 }
 
+log_warn() {
+  echo "[WARN] $1" >&2
+  logger -t "${LOG_TAG}" "[WARN] $1" 2>/dev/null || true
+}
+
 mkdir -p "${STREAM_DIR}"
+chown www-data:www-data "${STREAM_DIR}" 2>/dev/null || true
+chmod 755 "${STREAM_DIR}"
 umask 022
 
 # Variable to hold error file path (set when pipeline starts)
@@ -244,32 +251,48 @@ wait_for_camera() {
   local max_wait=60
   local waited=0
   
+  # Log initial diagnostic information
+  log_info "Initial diagnostics:"
+  log_info "  - Available video devices: $(ls /dev/video* 2>/dev/null || echo 'none')"
+  
   while [[ ${waited} -lt ${max_wait} ]]; do
     # Check if libcamera can detect a camera (preferred method on Bookworm)
     if command -v libcamera-hello >/dev/null 2>&1; then
-      if libcamera-hello --list-cameras 2>/dev/null | grep -q -E "^[0-9]+\s*:"; then
+      local libcamera_output
+      libcamera_output=$(libcamera-hello --list-cameras 2>&1 || true)
+      if echo "${libcamera_output}" | grep -q -E "^[0-9]+\s*:"; then
         log_info "Camera detected via libcamera after ${waited} seconds"
+        # Log only the first camera line to avoid verbose output
+        log_info "Camera: $(echo "${libcamera_output}" | grep -E "^[0-9]+\s*:" | head -1)"
         return 0
       fi
     fi
     
     # Check if rpicam-vid can detect a camera
-    if rpicam-vid --list-cameras 2>/dev/null | grep -q "Available cameras"; then
-      log_info "Camera detected via rpicam-vid after ${waited} seconds"
-      return 0
+    if command -v rpicam-vid >/dev/null 2>&1; then
+      local rpicam_output
+      rpicam_output=$(rpicam-vid --list-cameras 2>&1 || true)
+      if echo "${rpicam_output}" | grep -q "Available cameras"; then
+        log_info "Camera detected via rpicam-vid after ${waited} seconds"
+        return 0
+      fi
     fi
     
     # Alternative check: look for video devices
     if [[ -e /dev/video0 ]]; then
       # Additional check: verify the device is a camera and not just a dummy device
-      if v4l2-ctl --list-devices 2>/dev/null | grep -q -i "camera\|unicam\|bcm"; then
-        log_info "Video device found after ${waited} seconds"
-        return 0
-      fi
-      # If v4l2-ctl is not available, accept /dev/video0 as-is
-      if ! command -v v4l2-ctl >/dev/null 2>&1; then
-        log_info "Video device /dev/video0 found after ${waited} seconds"
-        return 0
+      if command -v v4l2-ctl >/dev/null 2>&1; then
+        if v4l2-ctl --list-devices 2>/dev/null | grep -q -i "camera\|unicam\|bcm\|imx\|ov5647"; then
+          log_info "Video device found via v4l2-ctl after ${waited} seconds"
+          return 0
+        fi
+      else
+        # If v4l2-ctl is not available, accept /dev/video0 as-is after minimum wait
+        local min_wait_no_v4l2=5
+        if [[ ${waited} -ge ${min_wait_no_v4l2} ]]; then
+          log_info "Video device /dev/video0 found after ${waited} seconds (v4l2-ctl not available)"
+          return 0
+        fi
       fi
     fi
     
@@ -291,6 +314,8 @@ wait_for_camera() {
   log_error "  - /dev/video* devices: ${video_devices}"
   log_error "  - Check journalctl for camera driver errors: journalctl -b | grep -i camera"
   log_error "  - Try running manually: libcamera-hello --list-cameras"
+  log_error "  - Verify camera is enabled in /boot/firmware/config.txt or /boot/config.txt"
+  log_error "  - Check if camera ribbon cable is properly connected"
   return 1
 }
 
@@ -335,14 +360,12 @@ rpicam-vid \
   --profile baseline \
   --level 4.0 \
   --inline \
-  --flush \
   -o - \
   2>"${RPICAM_ERR}" | ffmpeg \
+      -y \
       -loglevel warning \
-      -fflags nobuffer+flush_packets \
+      -fflags nobuffer \
       -flags low_delay \
-      -strict experimental \
-      -avioflags direct \
       -f h264 \
       -i - \
       -an \
@@ -350,7 +373,7 @@ rpicam-vid \
       -f hls \
       -hls_time "${HLS_SEGMENT_SECONDS}" \
       -hls_list_size "${HLS_LIST_SIZE}" \
-      -hls_flags delete_segments+append_list+omit_endlist+independent_segments+split_by_time \
+      -hls_flags delete_segments+append_list+omit_endlist+independent_segments \
       -hls_segment_type mpegts \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
       "${STREAM_DIR}/index.m3u8"
@@ -361,6 +384,12 @@ if [[ ${PIPELINE_EXIT} -ne 0 ]]; then
   if [[ -f "${RPICAM_ERR}" && -s "${RPICAM_ERR}" ]]; then
     log_error "rpicam-vid errors: $(cat "${RPICAM_ERR}")"
   fi
+  log_error "Common causes of pipeline failure:"
+  log_error "  - Camera not connected or not enabled"
+  log_error "  - Another process is using the camera"
+  log_error "  - Insufficient permissions (ensure script runs as root or video group)"
+  log_error "  - ffmpeg not installed or misconfigured"
+  log_error "To diagnose, run: rpicam-vid --timeout 5000 -o test.h264"
   # Cleanup is handled by trap, just exit
   exit ${PIPELINE_EXIT}
 fi
@@ -1115,11 +1144,11 @@ update_web_page() {
         case MediaError.MEDIA_ERR_ABORTED:
           return 'Carregamento do vídeo foi cancelado';
         case MediaError.MEDIA_ERR_NETWORK:
-          return 'Erro de rede ao carregar o vídeo. Verifique se o serviço rpicam-hls está rodando (sudo systemctl status rpicam-hls)';
+          return 'Erro de rede ao carregar o vídeo. Execute: sudo systemctl restart rpicam-hls';
         case MediaError.MEDIA_ERR_DECODE:
           return 'Erro ao decodificar o vídeo. A câmera pode não estar gerando frames válidos';
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          return 'Formato de vídeo não suportado ou stream não encontrado. Verifique se o arquivo stream/index.m3u8 existe';
+          return 'Stream não encontrado. O serviço de câmera pode não estar rodando. Execute: sudo systemctl restart rpicam-hls';
         default:
           return 'Erro desconhecido: código ' + error.code;
       }

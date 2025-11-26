@@ -234,6 +234,35 @@ Se o serviço de streaming da câmera não inicia com erro de status 1:
    - Verifique se a câmera está fisicamente conectada corretamente
    - Tente reconfigurar executando novamente: `sudo ./setup_camera_stream.sh`
 
+### Erro "Stream não encontrado" na interface web
+
+Se a página web mostra "Stream não encontrado" ou mensagem similar:
+
+1. **Verificar se o serviço de câmera está rodando:**
+   ```bash
+   sudo systemctl status rpicam-hls.service
+   ```
+
+2. **Verificar se o arquivo de stream existe:**
+   ```bash
+   ls -la /var/www/html/stream/
+   ```
+
+3. **Reiniciar o serviço de câmera:**
+   ```bash
+   sudo systemctl restart rpicam-hls.service
+   ```
+
+4. **Verificar logs para erros específicos:**
+   ```bash
+   sudo journalctl -u rpicam-hls.service -f
+   ```
+
+5. **Testar a câmera manualmente:**
+   ```bash
+   rpicam-vid --timeout 5000 -o test.h264
+   ```
+
 ### Outros problemas comuns
 
 - **Hotspot não aparece**: verifique se `rfkill list` está liberado. O script já mascara serviços relacionados; execute `sudo rfkill unblock all` como medida adicional.  
