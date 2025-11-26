@@ -579,7 +579,7 @@ create_config_page() {
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: true,
-          backBufferLength: 0,              // Sem buffer de retrocesso
+          backBufferLength: 0.1,            // Buffer mínimo de retrocesso para estabilidade
           maxBufferLength: 0.5,             // Buffer mínimo (500ms)
           maxMaxBufferLength: 1,            // Máximo absoluto 1s
           liveSyncDurationCount: 1,         // Sincronizar com 1 segmento
@@ -1460,7 +1460,7 @@ create_live_page() {
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: true,
-          backBufferLength: 0,              // Sem buffer de retrocesso
+          backBufferLength: 0.1,            // Buffer mínimo de retrocesso para estabilidade
           maxBufferLength: 0.5,             // Buffer mínimo (500ms)
           maxMaxBufferLength: 1,            // Máximo absoluto 1s
           liveSyncDurationCount: 1,         // Sincronizar com 1 segmento

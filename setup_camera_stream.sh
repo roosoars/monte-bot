@@ -329,15 +329,15 @@ wait_for_camera() {
   return 1
 }
 
-# Instant streaming settings (100-200ms latency)
+# Instant streaming settings (150-300ms latency)
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
 STREAM_WIDTH="${STREAM_WIDTH:-640}"
 STREAM_HEIGHT="${STREAM_HEIGHT:-480}"
 STREAM_BITRATE="${STREAM_BITRATE:-2000000}"
-# Keyframe every 5 frames (~166ms at 30fps) for instant streaming
-STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-5}"
-# Segment time 100ms for near-instant delivery
-HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.1}"
+# Keyframe every 10 frames (~333ms at 30fps) for balanced latency/bandwidth
+STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-10}"
+# Segment time 150ms for near-instant delivery with stability
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.15}"
 # Minimal playlist size for minimum buffer
 HLS_LIST_SIZE="${HLS_LIST_SIZE:-2}"
 
@@ -347,7 +347,7 @@ STREAM_STARTUP_TIMEOUT="${STREAM_STARTUP_TIMEOUT:-30}"
 log_info "Starting camera stream service (INSTANT STREAMING MODE)"
 log_info "Settings: ${STREAM_WIDTH}x${STREAM_HEIGHT} @ ${STREAM_FRAMERATE}fps, bitrate=${STREAM_BITRATE}"
 log_info "HLS: segments=${HLS_SEGMENT_SECONDS}s, playlist=${HLS_LIST_SIZE}, keyframe every ${STREAM_KEYFRAME_INTERVAL} frames"
-log_info "Expected latency: 100-200ms"
+log_info "Expected latency: 150-300ms"
 
 # Wait for camera to be ready
 if ! wait_for_camera; then
@@ -422,8 +422,8 @@ rpicam-vid \
       -loglevel warning \
       -fflags nobuffer+flush_packets+genpts \
       -flags low_delay \
-      -probesize 32 \
-      -analyzeduration 0 \
+      -probesize 1024 \
+      -analyzeduration 100000 \
       -max_delay 0 \
       -f h264 \
       -i - \
@@ -541,13 +541,13 @@ RestartSec=10
 TimeoutStartSec=120
 StandardOutput=journal
 StandardError=journal
-# Environment variables for INSTANT STREAMING (100-200ms latency)
+# Environment variables for INSTANT STREAMING (150-300ms latency)
 Environment=STREAM_FRAMERATE=30
 Environment=STREAM_WIDTH=640
 Environment=STREAM_HEIGHT=480
 Environment=STREAM_BITRATE=2000000
-Environment=STREAM_KEYFRAME_INTERVAL=5
-Environment=HLS_SEGMENT_SECONDS=0.1
+Environment=STREAM_KEYFRAME_INTERVAL=10
+Environment=HLS_SEGMENT_SECONDS=0.15
 Environment=HLS_LIST_SIZE=2
 
 [Install]

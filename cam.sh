@@ -310,14 +310,14 @@ STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
 STREAM_WIDTH="${STREAM_WIDTH:-640}"               # ⚡ 480p compacto para velocidade máxima
 STREAM_HEIGHT="${STREAM_HEIGHT:-480}"             # ⚡ 480p para processamento rápido
 STREAM_BITRATE="${STREAM_BITRATE:-2000000}"       # ⚡ 2Mbps (otimizado para velocidade)
-STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-5}"   # ⚡⚡⚡ CRÍTICO: Keyframe a cada 166ms
-HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.1}" # ⚡⚡⚡ CRÍTICO: 100ms segments (instantâneo)
+STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-10}"  # ⚡⚡ Keyframe a cada ~333ms (balanceado)
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.15}" # ⚡⚡⚡ CRÍTICO: 150ms segments (instantâneo + estável)
 HLS_LIST_SIZE="${HLS_LIST_SIZE:-2}"               # ⚡⚡⚡ CRÍTICO: buffer mínimo absoluto
 
 log_info "Starting camera stream service (INSTANT STREAMING MODE)"
 log_info "Settings: ${STREAM_WIDTH}x${STREAM_HEIGHT} @ ${STREAM_FRAMERATE}fps, bitrate=${STREAM_BITRATE}"
 log_info "HLS: segments=${HLS_SEGMENT_SECONDS}s, playlist=${HLS_LIST_SIZE}, keyframe every ${STREAM_KEYFRAME_INTERVAL} frames"
-log_info "Expected latency: 100-200ms (quase instantâneo!)"
+log_info "Expected latency: 150-300ms (quase instantâneo!)"
 
 # Wait for camera to be ready
 if ! wait_for_camera; then
@@ -355,8 +355,8 @@ rpicam-vid \
       -loglevel warning \
       -fflags nobuffer+flush_packets+genpts \
       -flags low_delay \
-      -probesize 32 \
-      -analyzeduration 0 \
+      -probesize 1024 \
+      -analyzeduration 100000 \
       -max_delay 0 \
       -f h264 \
       -i - \
@@ -412,13 +412,13 @@ RestartSec=10
 TimeoutStartSec=60
 StandardOutput=journal
 StandardError=journal
-# Environment variables for INSTANT STREAMING (100-200ms latency)
+# Environment variables for INSTANT STREAMING (150-300ms latency)
 Environment=STREAM_FRAMERATE=30
 Environment=STREAM_WIDTH=640
 Environment=STREAM_HEIGHT=480
 Environment=STREAM_BITRATE=2000000
-Environment=STREAM_KEYFRAME_INTERVAL=5
-Environment=HLS_SEGMENT_SECONDS=0.1
+Environment=STREAM_KEYFRAME_INTERVAL=10
+Environment=HLS_SEGMENT_SECONDS=0.15
 Environment=HLS_LIST_SIZE=2
 
 [Install]
@@ -887,11 +887,11 @@ main() {
   echo "║   MONTE BOT - SETUP COMPLETO (INSTANT STREAMING MODE)         ║"
   echo "╚════════════════════════════════════════════════════════════════╝"
   echo ""
-  echo "⚡ CONFIGURAÇÃO: Streaming Instantâneo (100-200ms)"
+  echo "⚡ CONFIGURAÇÃO: Streaming Instantâneo (150-300ms)"
   echo "📺 RESOLUÇÃO: 640x480 (480p compacto)"
   echo "🎥 BITRATE: 2Mbps (otimizado para velocidade)"
-  echo "📦 SEGMENTOS: 0.1s (100ms - instantâneo)"
-  echo "🔑 KEYFRAMES: A cada 5 frames (~166ms)"
+  echo "📦 SEGMENTOS: 0.15s (150ms - instantâneo)"
+  echo "🔑 KEYFRAMES: A cada 10 frames (~333ms)"
   echo ""
   
   check_operating_system
@@ -923,7 +923,7 @@ main() {
   echo "      http://$(hostname -I | awk '{print $1}')/"
   echo "      (Limpe o cache: Ctrl+Shift+R)"
   echo ""
-  echo "⚡ LATÊNCIA ESPERADA: 100-200ms (streaming instantâneo!)"
+  echo "⚡ LATÊNCIA ESPERADA: 150-300ms (streaming instantâneo!)"
   echo ""
 }
 
