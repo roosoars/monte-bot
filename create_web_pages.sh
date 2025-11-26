@@ -575,22 +575,28 @@ create_config_page() {
           updateStatus('HLS não suportado', 'error');
           return;
         }
-        // Ultra-low latency HLS configuration
+        // Instant streaming HLS configuration - latência mínima possível
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: true,
-          backBufferLength: 0.5,           // Minimal back buffer for stability
-          maxBufferLength: 1,
-          maxMaxBufferLength: 2,
-          liveSyncDurationCount: 1,
-          liveMaxLatencyDurationCount: 2,
+          backBufferLength: 0,              // Sem buffer de retrocesso
+          maxBufferLength: 0.5,             // Buffer mínimo (500ms)
+          maxMaxBufferLength: 1,            // Máximo absoluto 1s
+          liveSyncDurationCount: 1,         // Sincronizar com 1 segmento
+          liveMaxLatencyDurationCount: 2,   // Máximo 2 segmentos de latência
           liveDurationInfinity: true,
-          highBufferWatchdogPeriod: 1,
-          nudgeOffset: 0.1,
-          maxFragLookUpTolerance: 0.1,
-          maxLoadingDelay: 1,
-          startFragPrefetch: true,
-          testBandwidth: false
+          highBufferWatchdogPeriod: 0.5,    // Verificar buffer a cada 500ms
+          nudgeOffset: 0.05,                // Correção suave de 50ms
+          nudgeMaxRetry: 5,
+          maxFragLookUpTolerance: 0.05,     // Tolerância de 50ms
+          maxLoadingDelay: 0.5,             // Máximo 500ms de delay de carregamento
+          startFragPrefetch: true,          // Pré-carregar fragmentos
+          testBandwidth: false,             // Não testar bandwidth (mais rápido)
+          progressive: true,                // Download progressivo
+          fragLoadingTimeOut: 5000,         // Timeout de 5s para fragmentos
+          fragLoadingMaxRetry: 2,           // Máximo 2 retries
+          levelLoadingTimeOut: 5000,        // Timeout de 5s para levels
+          manifestLoadingTimeOut: 5000      // Timeout de 5s para manifest
         });
         hls.loadSource(source);
         hls.attachMedia(video);
@@ -1450,25 +1456,28 @@ create_live_page() {
           console.error('[MonteBot] HLS não suportado');
           return;
         }
-        // Ultra-low latency HLS configuration
+        // Instant streaming HLS configuration - latência mínima possível
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: true,
-          backBufferLength: 0.5,           // Minimal back buffer for stability
-          maxBufferLength: 1,            // Minimal buffer (1 second max)
-          maxMaxBufferLength: 2,         // Hard limit on buffer
-          liveSyncDurationCount: 1,      // Sync to 1 segment behind live
-          liveMaxLatencyDurationCount: 2, // Max 2 segments latency
-          liveDurationInfinity: true,    // Infinite live duration
-          highBufferWatchdogPeriod: 1,   // Fast buffer checking
-          nudgeOffset: 0.1,              // Small nudge for sync
-          nudgeMaxRetry: 5,              // Retry sync quickly
-          maxFragLookUpTolerance: 0.1,   // Faster fragment lookup
-          maxLoadingDelay: 1,            // Max 1s loading delay
-          fragLoadingTimeOut: 4000,      // 4s fragment timeout
-          fragLoadingMaxRetry: 2,        // Quick retry
-          startFragPrefetch: true,       // Prefetch fragments
-          testBandwidth: false           // Skip bandwidth tests for speed
+          backBufferLength: 0,              // Sem buffer de retrocesso
+          maxBufferLength: 0.5,             // Buffer mínimo (500ms)
+          maxMaxBufferLength: 1,            // Máximo absoluto 1s
+          liveSyncDurationCount: 1,         // Sincronizar com 1 segmento
+          liveMaxLatencyDurationCount: 2,   // Máximo 2 segmentos de latência
+          liveDurationInfinity: true,
+          highBufferWatchdogPeriod: 0.5,    // Verificar buffer a cada 500ms
+          nudgeOffset: 0.05,                // Correção suave de 50ms
+          nudgeMaxRetry: 5,
+          maxFragLookUpTolerance: 0.05,     // Tolerância de 50ms
+          maxLoadingDelay: 0.5,             // Máximo 500ms de delay de carregamento
+          fragLoadingTimeOut: 5000,         // Timeout de 5s para fragmentos
+          fragLoadingMaxRetry: 2,           // Máximo 2 retries
+          startFragPrefetch: true,          // Pré-carregar fragmentos
+          testBandwidth: false,             // Não testar bandwidth (mais rápido)
+          progressive: true,                // Download progressivo
+          levelLoadingTimeOut: 5000,        // Timeout de 5s para levels
+          manifestLoadingTimeOut: 5000      // Timeout de 5s para manifest
         });
         hls.loadSource(source);
         hls.attachMedia(video);

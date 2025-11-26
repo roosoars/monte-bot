@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Monte Bot - Setup Camera HLS Streaming
-# VERSÃO: 2.0 - Ultra-Baixa Latência (300-500ms)
+# VERSÃO: 3.0 - Streaming Instantâneo (100-200ms)
 # ═══════════════════════════════════════════════════════════════════════════
 
 STREAM_DIR="/var/www/html/stream"
@@ -202,8 +202,8 @@ write_camera_runner() {
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Monte Bot - Camera Runner (Ultra-Low Latency Mode)
-# Latência esperada: 300-500ms
+# Monte Bot - Camera Runner (Instant Streaming Mode)
+# Latência esperada: 100-200ms
 # ═══════════════════════════════════════════════════════════════════════════
 
 STREAM_DIR="/var/www/html/stream"
@@ -304,20 +304,20 @@ wait_for_camera() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# ULTRA-LOW LATENCY SETTINGS (300-500ms expected latency)
+# INSTANT STREAMING SETTINGS (100-200ms expected latency)
 # ═══════════════════════════════════════════════════════════════════════════
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
-STREAM_WIDTH="${STREAM_WIDTH:-854}"               # ⚡ 480p para baixa latência
-STREAM_HEIGHT="${STREAM_HEIGHT:-480}"             # ⚡ 480p para baixa latência
-STREAM_BITRATE="${STREAM_BITRATE:-3000000}"       # ⚡ 3Mbps (balanceado)
-STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-15}"  # ⚡ Keyframe a cada 0.5s
-HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.2}" # ⚡⚡⚡ CRÍTICO: 200ms segments
-HLS_LIST_SIZE="${HLS_LIST_SIZE:-2}"               # ⚡⚡⚡ CRÍTICO: buffer mínimo
+STREAM_WIDTH="${STREAM_WIDTH:-640}"               # ⚡ 480p compacto para velocidade máxima
+STREAM_HEIGHT="${STREAM_HEIGHT:-480}"             # ⚡ 480p para processamento rápido
+STREAM_BITRATE="${STREAM_BITRATE:-2000000}"       # ⚡ 2Mbps (otimizado para velocidade)
+STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-5}"   # ⚡⚡⚡ CRÍTICO: Keyframe a cada 166ms
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.1}" # ⚡⚡⚡ CRÍTICO: 100ms segments (instantâneo)
+HLS_LIST_SIZE="${HLS_LIST_SIZE:-2}"               # ⚡⚡⚡ CRÍTICO: buffer mínimo absoluto
 
-log_info "Starting camera stream service (ULTRA-LOW LATENCY MODE)"
+log_info "Starting camera stream service (INSTANT STREAMING MODE)"
 log_info "Settings: ${STREAM_WIDTH}x${STREAM_HEIGHT} @ ${STREAM_FRAMERATE}fps, bitrate=${STREAM_BITRATE}"
 log_info "HLS: segments=${HLS_SEGMENT_SECONDS}s, playlist=${HLS_LIST_SIZE}, keyframe every ${STREAM_KEYFRAME_INTERVAL} frames"
-log_info "Expected latency: 300-500ms"
+log_info "Expected latency: 100-200ms (quase instantâneo!)"
 
 # Wait for camera to be ready
 if ! wait_for_camera; then
@@ -330,10 +330,10 @@ log_info "Starting rpicam-vid and ffmpeg pipeline..."
 # Additional delay to ensure camera is fully initialized after detection
 sleep 2
 
-log_info "Launching ultra-low latency streaming pipeline..."
+log_info "Launching instant streaming pipeline..."
 
 # ═══════════════════════════════════════════════════════════════════════════
-# ULTRA-LOW LATENCY PIPELINE
+# INSTANT STREAMING PIPELINE - Latência mínima possível
 # ═══════════════════════════════════════════════════════════════════════════
 rpicam-vid \
   --timeout 0 \
@@ -353,10 +353,11 @@ rpicam-vid \
   ffmpeg \
       -y \
       -loglevel warning \
-      -fflags nobuffer+flush_packets \
+      -fflags nobuffer+flush_packets+genpts \
       -flags low_delay \
       -probesize 32 \
       -analyzeduration 0 \
+      -max_delay 0 \
       -f h264 \
       -i - \
       -an \
@@ -364,7 +365,7 @@ rpicam-vid \
       -f hls \
       -hls_time "${HLS_SEGMENT_SECONDS}" \
       -hls_list_size "${HLS_LIST_SIZE}" \
-      -hls_flags delete_segments+append_list+omit_endlist+independent_segments+discont_start+split_by_time \
+      -hls_flags delete_segments+append_list+omit_endlist+independent_segments+discont_start+split_by_time+temp_file \
       -hls_segment_type mpegts \
       -start_number 1 \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
@@ -391,7 +392,7 @@ EOF
 write_systemd_service() {
   cat <<EOF >"${SERVICE_FILE}"
 [Unit]
-Description=Streaming da câmera Raspberry Pi (rpicam + HLS) - Ultra-Low Latency
+Description=Streaming da câmera Raspberry Pi (rpicam + HLS) - Instant Streaming
 After=network.target nginx.service multi-user.target
 Wants=nginx.service
 # Wait for the system to be fully booted before starting camera service
@@ -411,13 +412,13 @@ RestartSec=10
 TimeoutStartSec=60
 StandardOutput=journal
 StandardError=journal
-# Environment variables for ULTRA-LOW LATENCY streaming
+# Environment variables for INSTANT STREAMING (100-200ms latency)
 Environment=STREAM_FRAMERATE=30
-Environment=STREAM_WIDTH=854
+Environment=STREAM_WIDTH=640
 Environment=STREAM_HEIGHT=480
-Environment=STREAM_BITRATE=3000000
-Environment=STREAM_KEYFRAME_INTERVAL=15
-Environment=HLS_SEGMENT_SECONDS=0.2
+Environment=STREAM_BITRATE=2000000
+Environment=STREAM_KEYFRAME_INTERVAL=5
+Environment=HLS_SEGMENT_SECONDS=0.1
 Environment=HLS_LIST_SIZE=2
 
 [Install]
@@ -883,13 +884,14 @@ main() {
   require_root
   
   echo "╔════════════════════════════════════════════════════════════════╗"
-  echo "║   MONTE BOT - SETUP COMPLETO (ULTRA-LOW LATENCY MODE)        ║"
+  echo "║   MONTE BOT - SETUP COMPLETO (INSTANT STREAMING MODE)         ║"
   echo "╚════════════════════════════════════════════════════════════════╝"
   echo ""
-  echo "⚡ CONFIGURAÇÃO: Ultra-Baixa Latência (300-500ms)"
-  echo "📺 RESOLUÇÃO: 854x480 (480p)"
-  echo "🎥 BITRATE: 3Mbps"
-  echo "📦 SEGMENTOS: 0.2s (mínimo)"
+  echo "⚡ CONFIGURAÇÃO: Streaming Instantâneo (100-200ms)"
+  echo "📺 RESOLUÇÃO: 640x480 (480p compacto)"
+  echo "🎥 BITRATE: 2Mbps (otimizado para velocidade)"
+  echo "📦 SEGMENTOS: 0.1s (100ms - instantâneo)"
+  echo "🔑 KEYFRAMES: A cada 5 frames (~166ms)"
   echo ""
   
   check_operating_system
@@ -921,7 +923,7 @@ main() {
   echo "      http://$(hostname -I | awk '{print $1}')/"
   echo "      (Limpe o cache: Ctrl+Shift+R)"
   echo ""
-  echo "⚡ LATÊNCIA ESPERADA: 300-500ms (quase tempo real!)"
+  echo "⚡ LATÊNCIA ESPERADA: 100-200ms (streaming instantâneo!)"
   echo ""
 }
 

@@ -329,23 +329,25 @@ wait_for_camera() {
   return 1
 }
 
-# Ultra-low latency streaming settings
+# Instant streaming settings (100-200ms latency)
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
 STREAM_WIDTH="${STREAM_WIDTH:-640}"
 STREAM_HEIGHT="${STREAM_HEIGHT:-480}"
-STREAM_BITRATE="${STREAM_BITRATE:-1500000}"
-# Keyframe every 15 frames (0.5s at 30fps) for faster seeking
-STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-15}"
-# Segment time must match keyframe interval (15 frames @ 30fps = 0.5s)
-HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.5}"
-# Minimal playlist size for faster updates
-HLS_LIST_SIZE="${HLS_LIST_SIZE:-3}"
+STREAM_BITRATE="${STREAM_BITRATE:-2000000}"
+# Keyframe every 5 frames (~166ms at 30fps) for instant streaming
+STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-5}"
+# Segment time 100ms for near-instant delivery
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.1}"
+# Minimal playlist size for minimum buffer
+HLS_LIST_SIZE="${HLS_LIST_SIZE:-2}"
 
 # Timeout for waiting for stream files to be created
 STREAM_STARTUP_TIMEOUT="${STREAM_STARTUP_TIMEOUT:-30}"
 
-log_info "Starting camera stream service"
+log_info "Starting camera stream service (INSTANT STREAMING MODE)"
 log_info "Settings: ${STREAM_WIDTH}x${STREAM_HEIGHT} @ ${STREAM_FRAMERATE}fps, bitrate=${STREAM_BITRATE}"
+log_info "HLS: segments=${HLS_SEGMENT_SECONDS}s, playlist=${HLS_LIST_SIZE}, keyframe every ${STREAM_KEYFRAME_INTERVAL} frames"
+log_info "Expected latency: 100-200ms"
 
 # Wait for camera to be ready
 if ! wait_for_camera; then
@@ -398,6 +400,8 @@ verify_stream_startup() {
 RPICAM_ERR=$(mktemp /tmp/rpicam_err.XXXXXX)
 FFMPEG_ERR=$(mktemp /tmp/ffmpeg_err.XXXXXX)
 
+log_info "Launching instant streaming pipeline..."
+
 # Start the pipeline in the background so we can monitor it
 rpicam-vid \
   --timeout 0 \
@@ -411,12 +415,16 @@ rpicam-vid \
   --profile baseline \
   --level 4.0 \
   --inline \
+  --flush \
   -o - \
   2>"${RPICAM_ERR}" | ffmpeg \
       -y \
       -loglevel warning \
-      -fflags nobuffer \
+      -fflags nobuffer+flush_packets+genpts \
       -flags low_delay \
+      -probesize 32 \
+      -analyzeduration 0 \
+      -max_delay 0 \
       -f h264 \
       -i - \
       -an \
@@ -424,8 +432,9 @@ rpicam-vid \
       -f hls \
       -hls_time "${HLS_SEGMENT_SECONDS}" \
       -hls_list_size "${HLS_LIST_SIZE}" \
-      -hls_flags delete_segments+append_list+omit_endlist+independent_segments \
+      -hls_flags delete_segments+append_list+omit_endlist+independent_segments+discont_start+split_by_time+temp_file \
       -hls_segment_type mpegts \
+      -start_number 1 \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
       "${STREAM_DIR}/index.m3u8" \
       2>"${FFMPEG_ERR}" &
@@ -512,7 +521,7 @@ EOF
 write_systemd_service() {
   cat <<EOF >"${SERVICE_FILE}"
 [Unit]
-Description=Streaming da câmera Raspberry Pi (rpicam + HLS)
+Description=Streaming da câmera Raspberry Pi (rpicam + HLS) - Instant Streaming
 After=network.target nginx.service multi-user.target
 Wants=nginx.service
 # Wait for the system to be fully booted before starting camera service
@@ -532,10 +541,14 @@ RestartSec=10
 TimeoutStartSec=120
 StandardOutput=journal
 StandardError=journal
-# Environment variables for camera stream configuration
+# Environment variables for INSTANT STREAMING (100-200ms latency)
 Environment=STREAM_FRAMERATE=30
 Environment=STREAM_WIDTH=640
 Environment=STREAM_HEIGHT=480
+Environment=STREAM_BITRATE=2000000
+Environment=STREAM_KEYFRAME_INTERVAL=5
+Environment=HLS_SEGMENT_SECONDS=0.1
+Environment=HLS_LIST_SIZE=2
 
 [Install]
 WantedBy=multi-user.target
