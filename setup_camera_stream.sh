@@ -360,14 +360,12 @@ rpicam-vid \
   --profile baseline \
   --level 4.0 \
   --inline \
-  --flush \
   -o - \
   2>"${RPICAM_ERR}" | ffmpeg \
+      -y \
       -loglevel warning \
-      -fflags nobuffer+flush_packets \
+      -fflags nobuffer \
       -flags low_delay \
-      -strict experimental \
-      -avioflags direct \
       -f h264 \
       -i - \
       -an \
@@ -375,7 +373,7 @@ rpicam-vid \
       -f hls \
       -hls_time "${HLS_SEGMENT_SECONDS}" \
       -hls_list_size "${HLS_LIST_SIZE}" \
-      -hls_flags delete_segments+append_list+omit_endlist+independent_segments+split_by_time \
+      -hls_flags delete_segments+append_list+omit_endlist+independent_segments \
       -hls_segment_type mpegts \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
       "${STREAM_DIR}/index.m3u8"
