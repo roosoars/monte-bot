@@ -197,6 +197,43 @@ Isso significa que o **relógio do sistema está atrasado**. O Raspberry Pi não
    sudo date -s "2024-01-15 14:30:00"
    ```
 
+### Erro "rpicam-hls.service failed to start" (code=exited, status=1/FAILURE)
+
+Se o serviço de streaming da câmera não inicia com erro de status 1:
+
+1. **Verificar logs do serviço:**
+   ```bash
+   sudo journalctl -u rpicam-hls.service -b --no-pager
+   ```
+
+2. **Verificar se a câmera está sendo detectada:**
+   ```bash
+   libcamera-hello --list-cameras
+   rpicam-vid --list-cameras
+   ls -la /dev/video*
+   ```
+
+3. **Verificar se os drivers da câmera estão carregados:**
+   ```bash
+   lsmod | grep -E "bcm|camera|unicam"
+   dmesg | grep -i camera
+   ```
+
+4. **Verificar configuração da câmera no boot:**
+   ```bash
+   cat /boot/firmware/config.txt | grep -E "camera|dtoverlay"
+   ```
+
+5. **Reiniciar o serviço manualmente:**
+   ```bash
+   sudo systemctl restart rpicam-hls.service
+   ```
+
+6. **Se o problema persistir após reiniciar:**
+   - Aguarde 1-2 minutos após o boot para que os drivers da câmera carreguem
+   - Verifique se a câmera está fisicamente conectada corretamente
+   - Tente reconfigurar executando novamente: `sudo ./setup_camera_stream.sh`
+
 ### Outros problemas comuns
 
 - **Hotspot não aparece**: verifique se `rfkill list` está liberado. O script já mascara serviços relacionados; execute `sudo rfkill unblock all` como medida adicional.  

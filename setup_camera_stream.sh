@@ -225,39 +225,72 @@ log_error() {
 mkdir -p "${STREAM_DIR}"
 umask 022
 
+# Variable to hold error file path (set when pipeline starts)
+RPICAM_ERR=""
+
 cleanup() {
   log_info "Cleaning up stream files..."
   find "${STREAM_DIR}" -type f \( -name '*.ts' -o -name '*.m3u8' \) -delete || true
+  # Clean up error file if it exists
+  if [[ -n "${RPICAM_ERR}" && -f "${RPICAM_ERR}" ]]; then
+    rm -f "${RPICAM_ERR}" || true
+  fi
 }
 trap cleanup EXIT
 
 # Wait for camera to be ready
 wait_for_camera() {
   log_info "Waiting for camera to be ready..."
-  local max_wait=30
+  local max_wait=60
   local waited=0
   
   while [[ ${waited} -lt ${max_wait} ]]; do
+    # Check if libcamera can detect a camera (preferred method on Bookworm)
+    if command -v libcamera-hello >/dev/null 2>&1; then
+      if libcamera-hello --list-cameras 2>/dev/null | grep -q -E "^[0-9]+\s*:"; then
+        log_info "Camera detected via libcamera after ${waited} seconds"
+        return 0
+      fi
+    fi
+    
     # Check if rpicam-vid can detect a camera
     if rpicam-vid --list-cameras 2>/dev/null | grep -q "Available cameras"; then
-      log_info "Camera detected after ${waited} seconds"
+      log_info "Camera detected via rpicam-vid after ${waited} seconds"
       return 0
     fi
     
     # Alternative check: look for video devices
     if [[ -e /dev/video0 ]]; then
-      log_info "Video device found after ${waited} seconds"
-      return 0
+      # Additional check: verify the device is a camera and not just a dummy device
+      if v4l2-ctl --list-devices 2>/dev/null | grep -q -i "camera\|unicam\|bcm"; then
+        log_info "Video device found after ${waited} seconds"
+        return 0
+      fi
+      # If v4l2-ctl is not available, accept /dev/video0 as-is
+      if ! command -v v4l2-ctl >/dev/null 2>&1; then
+        log_info "Video device /dev/video0 found after ${waited} seconds"
+        return 0
+      fi
     fi
     
     sleep 1
     waited=$((waited + 1))
-    if [[ $((waited % 5)) -eq 0 ]]; then
+    if [[ $((waited % 10)) -eq 0 ]]; then
       log_info "Still waiting for camera... (${waited}/${max_wait}s)"
+      # Log diagnostic info every 10 seconds
+      log_info "Checking: ls /dev/video* = $(ls /dev/video* 2>/dev/null || echo 'none')"
     fi
   done
   
+  # Cache diagnostic info to avoid delays in error reporting
+  local video_devices
+  video_devices=$(ls /dev/video* 2>/dev/null || echo 'none')
+  
   log_error "Camera not detected after ${max_wait} seconds"
+  log_error "Diagnostic info:"
+  log_error "  - /dev/video* devices: ${video_devices}"
+  log_error "  - Check journalctl for camera driver errors: journalctl -b | grep -i camera"
+  log_error "  - Try running manually: libcamera-hello --list-cameras"
   return 1
 }
 
@@ -284,7 +317,12 @@ fi
 
 log_info "Starting rpicam-vid and ffmpeg pipeline..."
 
+# Additional delay to ensure camera is fully initialized after detection
+sleep 2
+
 # Run the pipeline with error handling
+# Note: We redirect rpicam-vid stderr to a temporary file for better debugging
+RPICAM_ERR=$(mktemp /tmp/rpicam_err.XXXXXX)
 rpicam-vid \
   --timeout 0 \
   --nopreview \
@@ -299,7 +337,7 @@ rpicam-vid \
   --inline \
   --flush \
   -o - \
-  2>/dev/null | ffmpeg \
+  2>"${RPICAM_ERR}" | ffmpeg \
       -loglevel warning \
       -fflags nobuffer+flush_packets \
       -flags low_delay \
@@ -320,8 +358,15 @@ rpicam-vid \
 PIPELINE_EXIT=$?
 if [[ ${PIPELINE_EXIT} -ne 0 ]]; then
   log_error "Pipeline exited with code ${PIPELINE_EXIT}"
+  if [[ -f "${RPICAM_ERR}" && -s "${RPICAM_ERR}" ]]; then
+    log_error "rpicam-vid errors: $(cat "${RPICAM_ERR}")"
+  fi
+  # Cleanup is handled by trap, just exit
   exit ${PIPELINE_EXIT}
 fi
+# Clear RPICAM_ERR so cleanup function won't try to delete it again
+rm -f "${RPICAM_ERR}" 2>/dev/null || true
+RPICAM_ERR=""
 EOF
   chmod 755 "${CAMERA_RUNNER}"
 }
@@ -330,21 +375,29 @@ write_systemd_service() {
   cat <<EOF >"${SERVICE_FILE}"
 [Unit]
 Description=Streaming da câmera Raspberry Pi (rpicam + HLS)
-After=network.target nginx.service
+After=network.target nginx.service multi-user.target
 Wants=nginx.service
-StartLimitIntervalSec=300
-StartLimitBurst=5
+# Wait for the system to be fully booted before starting camera service
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sleep 3
+# Longer initial delay to ensure camera drivers are fully loaded
+ExecStartPre=/bin/sleep 5
 ExecStart=${CAMERA_RUNNER}
 Restart=always
-RestartSec=5
-TimeoutStartSec=60
+RestartSec=10
+# Longer timeout since camera detection can take up to 60 seconds
+TimeoutStartSec=120
 StandardOutput=journal
 StandardError=journal
-WatchdogSec=120
+# Environment variables for camera stream configuration
+Environment=STREAM_FRAMERATE=30
+Environment=STREAM_WIDTH=640
+Environment=STREAM_HEIGHT=480
 
 [Install]
 WantedBy=multi-user.target
