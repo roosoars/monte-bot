@@ -182,10 +182,10 @@ create_index_page() {
   </div>
   <script>
     // Check serial status from localStorage
-    var serialConnected = localStorage.getItem('montebot_serial_connected');
-    var serialPort = localStorage.getItem('montebot_serial_port');
-    var serialStatus = document.getElementById('serial-status');
-    var serialText = document.getElementById('serial-text');
+    const serialConnected = localStorage.getItem('montebot_serial_connected');
+    const serialPort = localStorage.getItem('montebot_serial_port');
+    const serialStatus = document.getElementById('serial-status');
+    const serialText = document.getElementById('serial-text');
     
     if (serialConnected === 'true') {
       serialStatus.classList.remove('no-target');
