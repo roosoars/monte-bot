@@ -232,15 +232,25 @@ chown www-data:www-data "${STREAM_DIR}" 2>/dev/null || true
 chmod 755 "${STREAM_DIR}"
 umask 022
 
-# Variable to hold error file path (set when pipeline starts)
+# Variables to hold error file paths (set when pipeline starts)
 RPICAM_ERR=""
+FFMPEG_ERR=""
+PIPELINE_PID=""
 
 cleanup() {
   log_info "Cleaning up stream files..."
+  # Kill the pipeline if it's still running
+  if [[ -n "${PIPELINE_PID}" ]]; then
+    kill -TERM ${PIPELINE_PID} 2>/dev/null || true
+    wait ${PIPELINE_PID} 2>/dev/null || true
+  fi
   find "${STREAM_DIR}" -type f \( -name '*.ts' -o -name '*.m3u8' \) -delete || true
-  # Clean up error file if it exists
+  # Clean up error files if they exist
   if [[ -n "${RPICAM_ERR}" && -f "${RPICAM_ERR}" ]]; then
     rm -f "${RPICAM_ERR}" || true
+  fi
+  if [[ -n "${FFMPEG_ERR}" && -f "${FFMPEG_ERR}" ]]; then
+    rm -f "${FFMPEG_ERR}" || true
   fi
 }
 trap cleanup EXIT
@@ -331,6 +341,9 @@ HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.2}"
 # Minimal playlist size for faster updates
 HLS_LIST_SIZE="${HLS_LIST_SIZE:-3}"
 
+# Timeout for waiting for stream files to be created
+STREAM_STARTUP_TIMEOUT="${STREAM_STARTUP_TIMEOUT:-30}"
+
 log_info "Starting camera stream service"
 log_info "Settings: ${STREAM_WIDTH}x${STREAM_HEIGHT} @ ${STREAM_FRAMERATE}fps, bitrate=${STREAM_BITRATE}"
 
@@ -345,9 +358,47 @@ log_info "Starting rpicam-vid and ffmpeg pipeline..."
 # Additional delay to ensure camera is fully initialized after detection
 sleep 2
 
+# Function to verify that the HLS stream is actually being created
+verify_stream_startup() {
+  local max_wait=${STREAM_STARTUP_TIMEOUT}
+  local waited=0
+  local m3u8_file="${STREAM_DIR}/index.m3u8"
+  
+  log_info "Waiting for HLS stream to start (timeout: ${max_wait}s)..."
+  
+  while [[ ${waited} -lt ${max_wait} ]]; do
+    # Check if m3u8 file exists and has content
+    if [[ -f "${m3u8_file}" && -s "${m3u8_file}" ]]; then
+      # Also check if at least one .ts segment exists
+      if ls "${STREAM_DIR}"/segment_*.ts >/dev/null 2>&1; then
+        log_info "HLS stream started successfully (m3u8 and segments detected after ${waited}s)"
+        return 0
+      fi
+    fi
+    
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $((waited % 5)) -eq 0 ]]; then
+      log_info "Still waiting for stream files... (${waited}/${max_wait}s)"
+      # Check what's in the stream directory
+      local stream_files
+      stream_files=$(ls -la "${STREAM_DIR}" 2>/dev/null || echo "directory not accessible")
+      log_info "Stream directory contents: ${stream_files}"
+    fi
+  done
+  
+  log_error "Stream files not created within ${max_wait} seconds"
+  log_error "Expected: ${m3u8_file} with content and .ts segment files"
+  log_error "Stream directory contents: $(ls -la "${STREAM_DIR}" 2>/dev/null || echo 'directory not accessible')"
+  return 1
+}
+
 # Run the pipeline with error handling
 # Note: We redirect rpicam-vid stderr to a temporary file for better debugging
 RPICAM_ERR=$(mktemp /tmp/rpicam_err.XXXXXX)
+FFMPEG_ERR=$(mktemp /tmp/ffmpeg_err.XXXXXX)
+
+# Start the pipeline in the background so we can monitor it
 rpicam-vid \
   --timeout 0 \
   --nopreview \
@@ -376,13 +427,25 @@ rpicam-vid \
       -hls_flags delete_segments+append_list+omit_endlist+independent_segments \
       -hls_segment_type mpegts \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
-      "${STREAM_DIR}/index.m3u8"
+      "${STREAM_DIR}/index.m3u8" \
+      2>"${FFMPEG_ERR}" &
 
-PIPELINE_EXIT=$?
-if [[ ${PIPELINE_EXIT} -ne 0 ]]; then
-  log_error "Pipeline exited with code ${PIPELINE_EXIT}"
+PIPELINE_PID=$!
+log_info "Pipeline started with PID ${PIPELINE_PID}"
+
+# Wait a moment for the pipeline to initialize
+sleep 2
+
+# Check if pipeline is still running
+if ! kill -0 ${PIPELINE_PID} 2>/dev/null; then
+  wait ${PIPELINE_PID} 2>/dev/null || true
+  PIPELINE_EXIT=$?
+  log_error "Pipeline exited immediately with code ${PIPELINE_EXIT}"
   if [[ -f "${RPICAM_ERR}" && -s "${RPICAM_ERR}" ]]; then
     log_error "rpicam-vid errors: $(cat "${RPICAM_ERR}")"
+  fi
+  if [[ -f "${FFMPEG_ERR}" && -s "${FFMPEG_ERR}" ]]; then
+    log_error "ffmpeg errors: $(cat "${FFMPEG_ERR}")"
   fi
   log_error "Common causes of pipeline failure:"
   log_error "  - Camera not connected or not enabled"
@@ -390,12 +453,58 @@ if [[ ${PIPELINE_EXIT} -ne 0 ]]; then
   log_error "  - Insufficient permissions (ensure script runs as root or video group)"
   log_error "  - ffmpeg not installed or misconfigured"
   log_error "To diagnose, run: rpicam-vid --timeout 5000 -o test.h264"
-  # Cleanup is handled by trap, just exit
+  rm -f "${RPICAM_ERR}" "${FFMPEG_ERR}" 2>/dev/null || true
   exit ${PIPELINE_EXIT}
 fi
-# Clear RPICAM_ERR so cleanup function won't try to delete it again
-rm -f "${RPICAM_ERR}" 2>/dev/null || true
+
+# Verify that stream files are actually being created
+if ! verify_stream_startup; then
+  log_error "Stream verification failed - pipeline is running but not producing output"
+  # Kill the pipeline since it's not working
+  kill -TERM ${PIPELINE_PID} 2>/dev/null || true
+  wait ${PIPELINE_PID} 2>/dev/null || true
+  if [[ -f "${RPICAM_ERR}" && -s "${RPICAM_ERR}" ]]; then
+    log_error "rpicam-vid errors: $(cat "${RPICAM_ERR}")"
+  fi
+  if [[ -f "${FFMPEG_ERR}" && -s "${FFMPEG_ERR}" ]]; then
+    log_error "ffmpeg errors: $(cat "${FFMPEG_ERR}")"
+  fi
+  log_error "The camera may be producing invalid video data or ffmpeg may not be receiving it"
+  log_error "To diagnose:"
+  log_error "  1. Test camera: rpicam-vid --timeout 5000 -o /tmp/test.h264"
+  log_error "  2. Test ffmpeg: ffmpeg -f h264 -i /tmp/test.h264 -c:v copy /tmp/test.mp4"
+  rm -f "${RPICAM_ERR}" "${FFMPEG_ERR}" 2>/dev/null || true
+  exit 1
+fi
+
+log_info "Stream is running successfully, waiting for pipeline..."
+
+# Wait for the pipeline (it should run indefinitely unless there's an error)
+wait ${PIPELINE_PID}
+PIPELINE_EXIT=$?
+
+if [[ ${PIPELINE_EXIT} -ne 0 ]]; then
+  log_error "Pipeline exited with code ${PIPELINE_EXIT}"
+  if [[ -f "${RPICAM_ERR}" && -s "${RPICAM_ERR}" ]]; then
+    log_error "rpicam-vid errors: $(cat "${RPICAM_ERR}")"
+  fi
+  if [[ -f "${FFMPEG_ERR}" && -s "${FFMPEG_ERR}" ]]; then
+    log_error "ffmpeg errors: $(cat "${FFMPEG_ERR}")"
+  fi
+  log_error "Common causes of pipeline failure:"
+  log_error "  - Camera not connected or not enabled"
+  log_error "  - Another process is using the camera"
+  log_error "  - Insufficient permissions (ensure script runs as root or video group)"
+  log_error "  - ffmpeg not installed or misconfigured"
+  log_error "To diagnose, run: rpicam-vid --timeout 5000 -o test.h264"
+  rm -f "${RPICAM_ERR}" "${FFMPEG_ERR}" 2>/dev/null || true
+  exit ${PIPELINE_EXIT}
+fi
+
+# Clear error files
+rm -f "${RPICAM_ERR}" "${FFMPEG_ERR}" 2>/dev/null || true
 RPICAM_ERR=""
+FFMPEG_ERR=""
 EOF
   chmod 755 "${CAMERA_RUNNER}"
 }

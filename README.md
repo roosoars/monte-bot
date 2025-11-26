@@ -58,6 +58,7 @@ O sistema usa configurações otimizadas para **ultra-baixa latência** no strea
 | `STREAM_BITRATE` | `1500000` | Taxa de bits (1.5 Mbps - otimizado para velocidade) |
 | `HLS_SEGMENT_SECONDS` | `0.2` | Duração do segmento HLS (200ms ultra-curto) |
 | `HLS_LIST_SIZE` | `3` | Número de segmentos na playlist |
+| `STREAM_STARTUP_TIMEOUT` | `30` | Tempo máximo (segundos) para aguardar a criação dos arquivos de stream |
 
 O binário `rpicam-hls.sh` aceita variáveis de ambiente para ajustar o stream. Crie um drop-in systemd para preservar mudanças:
 
@@ -243,10 +244,12 @@ Se a página web mostra "Stream não encontrado" ou mensagem similar:
    sudo systemctl status rpicam-hls.service
    ```
 
-2. **Verificar se o arquivo de stream existe:**
+2. **Verificar se o arquivo de stream existe e tem conteúdo:**
    ```bash
    ls -la /var/www/html/stream/
+   cat /var/www/html/stream/index.m3u8
    ```
+   **Nota:** O arquivo `index.m3u8` deve conter linhas começando com `#EXTM3U` e deve haver arquivos `segment_*.ts` no diretório.
 
 3. **Reiniciar o serviço de câmera:**
    ```bash
@@ -260,8 +263,16 @@ Se a página web mostra "Stream não encontrado" ou mensagem similar:
 
 5. **Testar a câmera manualmente:**
    ```bash
-   rpicam-vid --timeout 5000 -o test.h264
+   rpicam-vid --timeout 5000 -o /tmp/test.h264
    ```
+
+6. **Se o arquivo index.m3u8 existe mas está vazio:**
+   - O pipeline `rpicam-vid | ffmpeg` pode estar iniciando mas não produzindo saída válida
+   - Verifique se a câmera está gerando dados válidos com:
+     ```bash
+     rpicam-vid --timeout 5000 -o - | ffmpeg -f h264 -i - -c:v copy /tmp/test.mp4
+     ```
+   - Se o teste acima falhar, verifique os logs de erro detalhados em `/tmp/rpicam_err.*` e `/tmp/ffmpeg_err.*`
 
 ### Outros problemas comuns
 
