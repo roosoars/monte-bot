@@ -1047,10 +1047,29 @@ update_web_page() {
     let bestAreaRatio = 0;
     let previousCenter = null;
     let lostFrames = 0;
+    let streamRetryCount = 0;
+    const MAX_STREAM_RETRIES = 3;
+    const RETRY_DELAY_MS = 2000;
 
     function updateStatus(message, isError) {
       statusEl.innerHTML = message;
       statusEl.classList.toggle('error', Boolean(isError));
+    }
+
+    function getVideoErrorMessage(error) {
+      if (!error) return 'Erro desconhecido';
+      switch (error.code) {
+        case MediaError.MEDIA_ERR_ABORTED:
+          return 'Carregamento do vídeo foi cancelado';
+        case MediaError.MEDIA_ERR_NETWORK:
+          return 'Erro de rede ao carregar o vídeo. Verifique se o serviço rpicam-hls está rodando (sudo systemctl status rpicam-hls)';
+        case MediaError.MEDIA_ERR_DECODE:
+          return 'Erro ao decodificar o vídeo. A câmera pode não estar gerando frames válidos';
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          return 'Formato de vídeo não suportado ou stream não encontrado. Verifique se o arquivo stream/index.m3u8 existe';
+        default:
+          return 'Erro desconhecido: código ' + error.code;
+      }
     }
 
     function ensureVideoSizing() {
@@ -1078,11 +1097,24 @@ update_web_page() {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = source;
         video.addEventListener('loadeddata', () => {
+          streamRetryCount = 0;
           updateStatus('Transmissão ao vivo ativa.', false);
           ensureVideoSizing();
         });
-        video.addEventListener('error', () => {
-          updateStatus('Não foi possível iniciar o stream. Verifique o serviço rpicam-hls.', true);
+        video.addEventListener('error', (e) => {
+          const errorMsg = getVideoErrorMessage(video.error);
+          console.error('[MonteBot] Erro no stream:', errorMsg);
+          if (streamRetryCount < MAX_STREAM_RETRIES) {
+            streamRetryCount++;
+            updateStatus('Tentando reconectar ao stream (' + streamRetryCount + '/' + MAX_STREAM_RETRIES + ')...', true);
+            setTimeout(() => {
+              video.src = '';
+              video.src = source;
+              video.load();
+            }, RETRY_DELAY_MS);
+          } else {
+            updateStatus('Não foi possível iniciar o stream: ' + errorMsg + '. <br><small>Execute: sudo systemctl status rpicam-hls</small>', true);
+          }
         });
         return;
       }
@@ -1107,14 +1139,23 @@ update_web_page() {
         hls.loadSource(source);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
+          streamRetryCount = 0;
           updateStatus('Transmissão ao vivo ativa.', false);
           video.play().catch(() => {});
           ensureVideoSizing();
         });
         hls.on(Hls.Events.ERROR, function (event, data) {
           if (data.fatal) {
-            updateStatus('Erro fatal no stream: ' + data.type + ' - ' + data.details, true);
-            hls.destroy();
+            console.error('[MonteBot] Erro HLS fatal:', data.type, data.details);
+            if (streamRetryCount < MAX_STREAM_RETRIES) {
+              streamRetryCount++;
+              updateStatus('Tentando reconectar ao stream (' + streamRetryCount + '/' + MAX_STREAM_RETRIES + ')...', true);
+              hls.destroy();
+              setTimeout(loadStream, RETRY_DELAY_MS);
+            } else {
+              updateStatus('Erro fatal no stream: ' + data.type + ' - ' + data.details + '. <br><small>Verifique: sudo systemctl status rpicam-hls</small>', true);
+              hls.destroy();
+            }
           }
         });
       };

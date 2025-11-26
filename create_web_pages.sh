@@ -518,10 +518,31 @@ create_config_page() {
       analysisCanvas.height = height;
     }
 
+    let streamRetryCount = 0;
+    const MAX_STREAM_RETRIES = 3;
+    const RETRY_DELAY_MS = 2000;
+
+    function getVideoErrorMessage(error) {
+      if (!error) return 'Erro desconhecido';
+      switch (error.code) {
+        case MediaError.MEDIA_ERR_ABORTED:
+          return 'Carregamento do vídeo foi cancelado';
+        case MediaError.MEDIA_ERR_NETWORK:
+          return 'Erro de rede ao carregar o vídeo. Verifique se o serviço rpicam-hls está rodando (sudo systemctl status rpicam-hls)';
+        case MediaError.MEDIA_ERR_DECODE:
+          return 'Erro ao decodificar o vídeo. A câmera pode não estar gerando frames válidos';
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          return 'Formato de vídeo não suportado ou stream não encontrado. Verifique se o arquivo stream/index.m3u8 existe';
+        default:
+          return 'Erro desconhecido: código ' + error.code;
+      }
+    }
+
     function loadStream() {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = source;
         video.addEventListener('loadeddata', () => {
+          streamRetryCount = 0;
           video.play().catch((err) => {
             console.warn('[MonteBot] Autoplay bloqueado pelo navegador:', err);
           });
@@ -530,8 +551,20 @@ create_config_page() {
           detectBtn.disabled = false;
           checkSavedTarget();
         });
-        video.addEventListener('error', () => {
-          updateStatus('Erro ao carregar stream da câmera. Verifique o serviço rpicam-hls.', 'error');
+        video.addEventListener('error', (e) => {
+          const errorMsg = getVideoErrorMessage(video.error);
+          console.error('[MonteBot] Erro no stream:', errorMsg);
+          if (streamRetryCount < MAX_STREAM_RETRIES) {
+            streamRetryCount++;
+            updateStatus('Tentando reconectar ao stream (' + streamRetryCount + '/' + MAX_STREAM_RETRIES + ')...', 'error');
+            setTimeout(() => {
+              video.src = '';
+              video.src = source;
+              video.load();
+            }, RETRY_DELAY_MS);
+          } else {
+            updateStatus('Erro ao carregar stream da câmera: ' + errorMsg + '. <br><small>Verifique: sudo systemctl status rpicam-hls</small>', 'error');
+          }
         });
         return;
       }
@@ -562,6 +595,7 @@ create_config_page() {
         hls.loadSource(source);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
+          streamRetryCount = 0;
           video.play().catch(() => {});
           updateStatus('Câmera pronta. Clique em "Detectar Pessoa".', 'success');
           ensureVideoSizing();
@@ -570,7 +604,16 @@ create_config_page() {
         });
         hls.on(Hls.Events.ERROR, function (event, data) {
           if (data.fatal) {
-            updateStatus('Erro no stream: ' + data.details, 'error');
+            console.error('[MonteBot] Erro HLS fatal:', data.type, data.details);
+            if (streamRetryCount < MAX_STREAM_RETRIES) {
+              streamRetryCount++;
+              updateStatus('Tentando reconectar ao stream (' + streamRetryCount + '/' + MAX_STREAM_RETRIES + ')...', 'error');
+              hls.destroy();
+              setTimeout(loadStream, RETRY_DELAY_MS);
+            } else {
+              updateStatus('Erro no stream: ' + data.details + '. <br><small>Verifique: sudo systemctl status rpicam-hls</small>', 'error');
+              hls.destroy();
+            }
           }
         });
       };
@@ -1351,18 +1394,53 @@ create_live_page() {
       analysisCanvas.height = height;
     }
 
+    let streamRetryCount = 0;
+    const MAX_STREAM_RETRIES = 3;
+    const RETRY_DELAY_MS = 2000;
+
+    function getVideoErrorMessage(error) {
+      if (!error) return 'Erro desconhecido';
+      switch (error.code) {
+        case MediaError.MEDIA_ERR_ABORTED:
+          return 'Carregamento cancelado';
+        case MediaError.MEDIA_ERR_NETWORK:
+          return 'Erro de rede - verifique rpicam-hls';
+        case MediaError.MEDIA_ERR_DECODE:
+          return 'Erro de decodificação';
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          return 'Stream não encontrado';
+        default:
+          return 'Erro ' + error.code;
+      }
+    }
+
     function loadStream() {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = source;
         video.addEventListener('loadeddata', () => {
+          streamRetryCount = 0;
           video.play().catch((err) => {
             console.warn('[MonteBot] Autoplay bloqueado pelo navegador:', err);
           });
           ensureVideoSizing();
           initTracking();
         });
-        video.addEventListener('error', () => {
-          console.error('[MonteBot] Erro ao carregar stream da câmera');
+        video.addEventListener('error', (e) => {
+          const errorMsg = getVideoErrorMessage(video.error);
+          console.error('[MonteBot] Erro no stream:', errorMsg);
+          if (streamRetryCount < MAX_STREAM_RETRIES) {
+            streamRetryCount++;
+            console.log('[MonteBot] Tentando reconectar (' + streamRetryCount + '/' + MAX_STREAM_RETRIES + ')...');
+            setTimeout(() => {
+              video.src = '';
+              video.src = source;
+              video.load();
+            }, RETRY_DELAY_MS);
+          } else {
+            console.error('[MonteBot] Falha após ' + MAX_STREAM_RETRIES + ' tentativas: ' + errorMsg);
+            detectionStatus.textContent = '⚠️';
+            detectionStatus.style.color = '#ff6b6b';
+          }
         });
         return;
       }
@@ -1395,16 +1473,31 @@ create_live_page() {
         hls.loadSource(source);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
+          streamRetryCount = 0;
           video.play().catch(() => {});
           ensureVideoSizing();
           initTracking();
         });
-        // Auto-sync to live edge on stall
+        // Auto-sync to live edge on stall and handle fatal errors
         hls.on(Hls.Events.ERROR, function (event, data) {
           if (data.details === 'bufferStalledError') {
             console.log('[MonteBot] Buffer stalled, syncing to live edge');
             if (hls.liveSyncPosition !== null && hls.liveSyncPosition !== undefined) {
               video.currentTime = hls.liveSyncPosition;
+            }
+          }
+          if (data.fatal) {
+            console.error('[MonteBot] Erro HLS fatal:', data.type, data.details);
+            if (streamRetryCount < MAX_STREAM_RETRIES) {
+              streamRetryCount++;
+              console.log('[MonteBot] Tentando reconectar (' + streamRetryCount + '/' + MAX_STREAM_RETRIES + ')...');
+              hls.destroy();
+              setTimeout(loadStream, RETRY_DELAY_MS);
+            } else {
+              console.error('[MonteBot] Falha após ' + MAX_STREAM_RETRIES + ' tentativas');
+              detectionStatus.textContent = '⚠️';
+              detectionStatus.style.color = '#ff6b6b';
+              hls.destroy();
             }
           }
         });
