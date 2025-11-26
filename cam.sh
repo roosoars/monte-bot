@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Monte Bot - Setup Camera HLS Streaming
+# VERSÃO: 2.0 - Ultra-Baixa Latência (300-500ms)
+# ═══════════════════════════════════════════════════════════════════════════
+
 STREAM_DIR="/var/www/html/stream"
 STATIC_DIR="/var/www/html/static"
 HLS_JS_PATH="${STATIC_DIR}/hls.min.js"
@@ -196,6 +201,11 @@ write_camera_runner() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Monte Bot - Camera Runner (Ultra-Low Latency Mode)
+# Latência esperada: 300-500ms
+# ═══════════════════════════════════════════════════════════════════════════
+
 STREAM_DIR="/var/www/html/stream"
 LOG_TAG="rpicam-hls"
 
@@ -225,7 +235,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Wait for camera to be ready (timeout reduzido para 30s)
+# Wait for camera to be ready (timeout: 30s)
 wait_for_camera() {
   log_info "Waiting for camera to be ready..."
   local max_wait=30
@@ -293,17 +303,21 @@ wait_for_camera() {
   return 1
 }
 
-# ===== CONFIGURAÇÕES CORRIGIDAS (baseadas no código antigo que funcionava) =====
+# ═══════════════════════════════════════════════════════════════════════════
+# ULTRA-LOW LATENCY SETTINGS (300-500ms expected latency)
+# ═══════════════════════════════════════════════════════════════════════════
 STREAM_FRAMERATE="${STREAM_FRAMERATE:-30}"
-STREAM_WIDTH="${STREAM_WIDTH:-1280}"           # Corrigido de 640 para 1280
-STREAM_HEIGHT="${STREAM_HEIGHT:-720}"          # Corrigido de 480 para 720
-STREAM_BITRATE="${STREAM_BITRATE:-6000000}"    # Corrigido de 1500000 para 6000000
-STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-${STREAM_FRAMERATE}}"
-HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.4}"
-HLS_LIST_SIZE="${HLS_LIST_SIZE:-4}"
+STREAM_WIDTH="${STREAM_WIDTH:-854}"               # ⚡ 480p para baixa latência
+STREAM_HEIGHT="${STREAM_HEIGHT:-480}"             # ⚡ 480p para baixa latência
+STREAM_BITRATE="${STREAM_BITRATE:-3000000}"       # ⚡ 3Mbps (balanceado)
+STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-15}"  # ⚡ Keyframe a cada 0.5s
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.2}" # ⚡⚡⚡ CRÍTICO: 200ms segments
+HLS_LIST_SIZE="${HLS_LIST_SIZE:-2}"               # ⚡⚡⚡ CRÍTICO: buffer mínimo
 
-log_info "Starting camera stream service"
+log_info "Starting camera stream service (ULTRA-LOW LATENCY MODE)"
 log_info "Settings: ${STREAM_WIDTH}x${STREAM_HEIGHT} @ ${STREAM_FRAMERATE}fps, bitrate=${STREAM_BITRATE}"
+log_info "HLS: segments=${HLS_SEGMENT_SECONDS}s, playlist=${HLS_LIST_SIZE}, keyframe every ${STREAM_KEYFRAME_INTERVAL} frames"
+log_info "Expected latency: 300-500ms"
 
 # Wait for camera to be ready
 if ! wait_for_camera; then
@@ -316,9 +330,11 @@ log_info "Starting rpicam-vid and ffmpeg pipeline..."
 # Additional delay to ensure camera is fully initialized after detection
 sleep 2
 
-log_info "Launching streaming pipeline..."
+log_info "Launching ultra-low latency streaming pipeline..."
 
-# ===== PIPELINE CORRIGIDO =====
+# ═══════════════════════════════════════════════════════════════════════════
+# ULTRA-LOW LATENCY PIPELINE
+# ═══════════════════════════════════════════════════════════════════════════
 rpicam-vid \
   --timeout 0 \
   --nopreview \
@@ -328,16 +344,19 @@ rpicam-vid \
   --bitrate "${STREAM_BITRATE}" \
   --intra "${STREAM_KEYFRAME_INTERVAL}" \
   --codec h264 \
-  --profile high \
-  --level 4.2 \
+  --profile baseline \
+  --level 4.0 \
   --inline \
+  --flush \
   -o - \
   2>&1 | tee >(grep -i "error\|warn" | head -20 | while read line; do log_warn "rpicam: $line"; done) | \
   ffmpeg \
       -y \
       -loglevel warning \
-      -fflags nobuffer \
+      -fflags nobuffer+flush_packets \
       -flags low_delay \
+      -probesize 32 \
+      -analyzeduration 0 \
       -f h264 \
       -i - \
       -an \
@@ -345,8 +364,9 @@ rpicam-vid \
       -f hls \
       -hls_time "${HLS_SEGMENT_SECONDS}" \
       -hls_list_size "${HLS_LIST_SIZE}" \
-      -hls_flags delete_segments+append_list+omit_endlist+independent_segments \
+      -hls_flags delete_segments+append_list+omit_endlist+independent_segments+discont_start+split_by_time \
       -hls_segment_type mpegts \
+      -start_number 1 \
       -hls_segment_filename "${STREAM_DIR}/segment_%03d.ts" \
       "${STREAM_DIR}/index.m3u8"
 
@@ -371,7 +391,7 @@ EOF
 write_systemd_service() {
   cat <<EOF >"${SERVICE_FILE}"
 [Unit]
-Description=Streaming da câmera Raspberry Pi (rpicam + HLS)
+Description=Streaming da câmera Raspberry Pi (rpicam + HLS) - Ultra-Low Latency
 After=network.target nginx.service multi-user.target
 Wants=nginx.service
 # Wait for the system to be fully booted before starting camera service
@@ -391,11 +411,14 @@ RestartSec=10
 TimeoutStartSec=60
 StandardOutput=journal
 StandardError=journal
-# Environment variables for camera stream configuration
+# Environment variables for ULTRA-LOW LATENCY streaming
 Environment=STREAM_FRAMERATE=30
-Environment=STREAM_WIDTH=1280
-Environment=STREAM_HEIGHT=720
-Environment=STREAM_BITRATE=6000000
+Environment=STREAM_WIDTH=854
+Environment=STREAM_HEIGHT=480
+Environment=STREAM_BITRATE=3000000
+Environment=STREAM_KEYFRAME_INTERVAL=15
+Environment=HLS_SEGMENT_SECONDS=0.2
+Environment=HLS_LIST_SIZE=2
 
 [Install]
 WantedBy=multi-user.target
@@ -858,6 +881,17 @@ reload_services() {
 
 main() {
   require_root
+  
+  echo "╔════════════════════════════════════════════════════════════════╗"
+  echo "║   MONTE BOT - SETUP COMPLETO (ULTRA-LOW LATENCY MODE)        ║"
+  echo "╚════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "⚡ CONFIGURAÇÃO: Ultra-Baixa Latência (300-500ms)"
+  echo "📺 RESOLUÇÃO: 854x480 (480p)"
+  echo "🎥 BITRATE: 3Mbps"
+  echo "📦 SEGMENTOS: 0.2s (mínimo)"
+  echo ""
+  
   check_operating_system
   install_camera_packages
   enable_camera_overlay
@@ -870,7 +904,25 @@ main() {
   write_serial_service
   update_web_page
   reload_services
-  echo "[INFO] Configuração da câmera concluída. Reinicie o Raspberry Pi para garantir que o overlay da câmera seja carregado." >&2
+  
+  echo ""
+  echo "╔════════════════════════════════════════════════════════════════╗"
+  echo "║                  INSTALAÇÃO CONCLUÍDA!                        ║"
+  echo "╚════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "📋 PRÓXIMOS PASSOS:"
+  echo "   1. Reinicie o Raspberry Pi:"
+  echo "      sudo reboot"
+  echo ""
+  echo "   2. Após reiniciar, verifique o serviço:"
+  echo "      sudo systemctl status rpicam-hls.service"
+  echo ""
+  echo "   3. Teste no navegador:"
+  echo "      http://$(hostname -I | awk '{print $1}')/"
+  echo "      (Limpe o cache: Ctrl+Shift+R)"
+  echo ""
+  echo "⚡ LATÊNCIA ESPERADA: 300-500ms (quase tempo real!)"
+  echo ""
 }
 
 main "$@"
