@@ -336,8 +336,8 @@ STREAM_HEIGHT="${STREAM_HEIGHT:-480}"
 STREAM_BITRATE="${STREAM_BITRATE:-1500000}"
 # Keyframe every 15 frames (0.5s at 30fps) for faster seeking
 STREAM_KEYFRAME_INTERVAL="${STREAM_KEYFRAME_INTERVAL:-15}"
-# Ultra-short segments for minimal latency (0.2 seconds)
-HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.2}"
+# Segment time must match keyframe interval (15 frames @ 30fps = 0.5s)
+HLS_SEGMENT_SECONDS="${HLS_SEGMENT_SECONDS:-0.5}"
 # Minimal playlist size for faster updates
 HLS_LIST_SIZE="${HLS_LIST_SIZE:-3}"
 
