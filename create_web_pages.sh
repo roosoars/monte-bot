@@ -1402,15 +1402,15 @@ create_live_page() {
       if (!error) return 'Erro desconhecido';
       switch (error.code) {
         case MediaError.MEDIA_ERR_ABORTED:
-          return 'Carregamento cancelado';
+          return 'Carregamento do vídeo foi cancelado';
         case MediaError.MEDIA_ERR_NETWORK:
-          return 'Erro de rede - verifique rpicam-hls';
+          return 'Erro de rede ao carregar o vídeo. Verifique se o serviço rpicam-hls está rodando';
         case MediaError.MEDIA_ERR_DECODE:
-          return 'Erro de decodificação';
+          return 'Erro ao decodificar o vídeo. A câmera pode não estar gerando frames válidos';
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          return 'Stream não encontrado';
+          return 'Formato de vídeo não suportado ou stream não encontrado';
         default:
-          return 'Erro ' + error.code;
+          return 'Erro desconhecido: código ' + error.code;
       }
     }
 

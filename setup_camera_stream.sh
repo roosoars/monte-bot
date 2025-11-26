@@ -1113,7 +1113,7 @@ update_web_page() {
               video.load();
             }, RETRY_DELAY_MS);
           } else {
-            updateStatus('Não foi possível iniciar o stream: ' + errorMsg + '. <br><small>Execute: sudo systemctl status rpicam-hls</small>', true);
+            updateStatus('Não foi possível iniciar o stream: ' + errorMsg + '. <br><small>Verifique: sudo systemctl status rpicam-hls</small>', true);
           }
         });
         return;
