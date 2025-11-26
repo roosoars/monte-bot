@@ -262,7 +262,8 @@ wait_for_camera() {
       libcamera_output=$(libcamera-hello --list-cameras 2>&1 || true)
       if echo "${libcamera_output}" | grep -q -E "^[0-9]+\s*:"; then
         log_info "Camera detected via libcamera after ${waited} seconds"
-        log_info "Camera info: ${libcamera_output}"
+        # Log only the first camera line to avoid verbose output
+        log_info "Camera: $(echo "${libcamera_output}" | grep -E "^[0-9]+\s*:" | head -1)"
         return 0
       fi
     fi
@@ -286,8 +287,9 @@ wait_for_camera() {
           return 0
         fi
       else
-        # If v4l2-ctl is not available, accept /dev/video0 as-is after short wait
-        if [[ ${waited} -ge 5 ]]; then
+        # If v4l2-ctl is not available, accept /dev/video0 as-is after minimum wait
+        local min_wait_no_v4l2=5
+        if [[ ${waited} -ge ${min_wait_no_v4l2} ]]; then
           log_info "Video device /dev/video0 found after ${waited} seconds (v4l2-ctl not available)"
           return 0
         fi
