@@ -275,8 +275,6 @@ wait_for_camera() {
     waited=$((waited + 1))
     if [[ $((waited % 10)) -eq 0 ]]; then
       log_info "Still waiting for camera... (${waited}/${max_wait}s)"
-      # Log diagnostic info every 10 seconds
-      log_info "Checking: ls /dev/video* = $(ls /dev/video* 2>/dev/null || echo 'none')"
     fi
   done
   
